@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         🧠 子川助手·统一考核自动答题 v1.1.0（内置2026公需课题库）
+// @name         🧠 子川助手·统一考核自动答题 v1.2.0（内置2026公需课题库+联网作答）
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
-// @description  子川助手配套脚本：华医网统一课程考核(sdnew.91huayi.com)自动答题，内置2026公需课《人工智能赋能高质量发展》20题题库，自动匹配并点击答案、自动切题。不自动交卷，答完后提示人工核对。
+// @version      1.2.0
+// @description  子川助手配套脚本：华医网统一课程考核(sdnew.91huayi.com)自动答题。题库匹配 → AI联网 → 免费搜索三级作答，题库未命中也能答；内置2026公需课《人工智能赋能高质量发展》20题题库。不自动交卷，答完后提示人工核对。
 // @author       Lin (WorkBuddy)
 // @license      AGPL License
 // @match        https://sdnew.91huayi.com/ExamInterface/ComputerExamIndex*
@@ -17,6 +17,7 @@
   // 题库（Q_BANK）：kw=题干关键词（用于匹配），options=选项文本，
   // ans=答案（单选/多选为选项字母，判断为 '对'/'错'）
   // 新增题目：按同样格式追加一条即可（题干关键词要足够独特）
+  // 题库未命中的题会自动走 AI 联网 → 免费搜索（见下方配置面板）
   // ═══════════════════════════════════════════════════════════════
   const Q_BANK = [
     // ── 单选题 (7) ──
@@ -79,6 +80,166 @@
     } catch (e) {}
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 【v1.2.0】联网作答（题库未命中时的兜底）
+  // ⚠️ localStorage 按 origin 隔离：主脚本(cme28域)配的 AI 接口这里读不到，
+  //    需要在本考试页通过右下角「AI配置」按钮单独配置一次（存 sdnew 域）。
+  // ═══════════════════════════════════════════════════════════════
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  function aiConfigured() {
+    return !!(lsGet('hyu_ai_base') && lsGet('hyu_ai_key') && lsGet('hyu_ai_model'));
+  }
+
+  // AI 作答：返回字母串（"B"/"ABCD"）或 '对'/'错'；失败抛异常
+  async function aiAskOnline(question, options, isJudge) {
+    const base = (lsGet('hyu_ai_base') || '').replace(/\/+$/, '');
+    const prompt = isJudge
+      ? '你正在帮助用户完成继续教育考试判断题，请判断正误。\n题目：' + question +
+        '\n只输出一个字：对 或 错，不要输出任何其他内容。'
+      : '你正在帮助用户完成继续教育考试，请选出所有正确选项（单选题只有一个正确项，多选题可能有多个）。\n题目：' +
+        question + '\n选项：\n' + options.join('\n') +
+        '\n只输出正确选项的字母（多选把字母连写，如 ABCD），不要输出任何其他内容。';
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 20000);
+    let res;
+    try {
+      res = await fetch(base + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + lsGet('hyu_ai_key') },
+        body: JSON.stringify({ model: lsGet('hyu_ai_model'), messages: [{ role: 'user', content: prompt }], temperature: 0 }),
+        signal: ctrl.signal,
+      });
+    } finally { clearTimeout(to); }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const content = String((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '').trim();
+    if (isJudge) {
+      if (/[错误×x]/.test(content)) return '错';
+      if (/[对√]/.test(content)) return '对';
+      throw new Error('AI 未返回对/错: ' + content.slice(0, 30));
+    }
+    const letters = content.toUpperCase().match(/[A-Z]/g) || [];
+    const maxLetter = String.fromCharCode(65 + Math.max(options.length - 1, 0));
+    const uniq = [];
+    for (const L of letters) if (L <= maxLetter && !uniq.includes(L)) uniq.push(L);
+    if (!uniq.length) throw new Error('AI 未返回选项字母: ' + content.slice(0, 30));
+    return uniq.join('');
+  }
+
+  // 免费搜索：公共代理抓 Bing/百度结果页提取答案模式（无需 Key）
+  // ⚠️ 境外公共代理在大陆网络多数不可达，故默认关（「搜索」开关控制），
+  //    避免每题白等代理超时；网络可达环境打开即可。
+  async function fetchViaProxy(targetUrl, timeoutMs) {
+    const proxies = [
+      u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+      u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u),
+    ];
+    for (const p of proxies) {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), timeoutMs || 8000);
+      try {
+        const res = await fetch(p(targetUrl), { signal: ctrl.signal });
+        clearTimeout(to);
+        if (!res.ok) continue;
+        const text = await res.text();
+        if (text && text.length > 500) return text;
+      } catch (e) { clearTimeout(to); }
+    }
+    return null;
+  }
+
+  function htmlToText(html) {
+    return String(html)
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&[a-z]+;/gi, ' ')
+      .replace(/\s+/g, ' ');
+  }
+
+  async function freeSearchAnswer(question, options, isJudge) {
+    if (lsGet('hyu_search_on') !== '1') return null;
+    const query = String(question).slice(0, 60) + ' 答案';
+    const engines = ['https://www.bing.com/search?q=', 'https://www.baidu.com/s?wd='];
+    for (const engine of engines) {
+      const html = await fetchViaProxy(engine + encodeURIComponent(query));
+      if (!html) continue;
+      const text = htmlToText(html);
+      const qHead = String(question).replace(/\s+/g, '').slice(0, 15);
+      if (qHead && !text.replace(/\s+/g, '').includes(qHead)) continue;
+      if (isJudge) {
+        const j = text.match(/答案\s*[：:是为]*\s*(对|错|正确|错误|√|×)/);
+        if (j) return /[错误×]/.test(j[1]) ? '错' : '对';
+      } else {
+        const m = text.match(/(?:正确答案|参考答案|【答案】|答案)\s*[：:是为于]*\s*([A-Z]{1,6})/);
+        if (m) {
+          const maxLetter = String.fromCharCode(65 + Math.max(options.length - 1, 0));
+          const uniq = [];
+          for (const L of m[1].split('')) if (L <= maxLetter && !uniq.includes(L)) uniq.push(L);
+          if (uniq.length) return uniq.join('');
+        }
+      }
+    }
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 【v1.2.0】配置面板（右下角小按钮组）
+  // ═══════════════════════════════════════════════════════════════
+  function ensurePanel() {
+    if (document.getElementById('hyu-sd-panel')) return;
+    const box = document.createElement('div');
+    box.id = 'hyu-sd-panel';
+    box.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:2147483647;display:flex;gap:6px;font:12px "Microsoft YaHei";';
+    const btnCss = 'padding:4px 10px;border-radius:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;';
+    box.innerHTML =
+      '<span id="hyu-sd-cfg" style="' + btnCss + '">AI配置</span>' +
+      '<span id="hyu-sd-test" style="' + btnCss + '">测试</span>' +
+      '<span id="hyu-sd-search" style="' + btnCss + '" title="免费联网搜答案（走公共代理，网络不通自动跳过）">搜索:关</span>';
+    document.body.appendChild(box);
+
+    const searchBtn = box.querySelector('#hyu-sd-search');
+    function refreshSearch() {
+      const on = lsGet('hyu_search_on') === '1';
+      searchBtn.textContent = '搜索:' + (on ? '开' : '关');
+      searchBtn.style.background = on ? '#1677ff' : '#e0e0e0';
+      searchBtn.style.color = on ? '#fff' : '#555';
+    }
+    searchBtn.onclick = () => {
+      const on = lsGet('hyu_search_on') === '1';
+      lsSet('hyu_search_on', on ? '0' : '1');
+      refreshSearch();
+      log('免费搜索已' + (on ? '关闭' : '开启'));
+    };
+    refreshSearch();
+
+    box.querySelector('#hyu-sd-cfg').onclick = () => {
+      const base = prompt('AI 接口地址（OpenAI 兼容，填到 /v1 为止）：', lsGet('hyu_ai_base') || 'https://api.openai.com/v1');
+      if (base === null) return;
+      const key = prompt('API Key（仅保存在本浏览器）：', lsGet('hyu_ai_key') || '');
+      if (key === null) return;
+      const model = prompt('模型名：', lsGet('hyu_ai_model') || '');
+      if (model === null) return;
+      lsSet('hyu_ai_base', base.trim());
+      lsSet('hyu_ai_key', key.trim());
+      lsSet('hyu_ai_model', model.trim());
+      log(aiConfigured() ? 'AI 配置已保存，题库未命中将联网作答' : '配置不完整，仍用题库作答');
+    };
+
+    box.querySelector('#hyu-sd-test').onclick = async () => {
+      if (!aiConfigured()) { alert('请先点「AI配置」填好接口地址、Key 和模型名'); return; }
+      try {
+        const r = await aiAskOnline('1+1=?', ['A. 1', 'B. 2', 'C. 3'], false);
+        alert('AI 接口正常 ✓（测试题返回 ' + r + '，应为 B）');
+      } catch (e) {
+        alert('AI 调用失败：' + e.message + '\n常见原因：接口不支持浏览器跨域(CORS)、Key 无效、地址填错');
+      }
+    };
+  }
+
   // 提取当前显示的题目文本（从"一、单选题"等标题后的题目块）
   function getCurrentQuestionText() {
     const body = document.body ? document.body.innerText : '';
@@ -103,6 +264,26 @@
     return null;
   }
 
+  // 【v1.2.0】从题目块解析选项行（"A. xxx" 格式），供联网作答使用
+  function parsePageOptions(qText) {
+    const opts = [];
+    const re = /(?:^|\n)\s*([A-Z])[.．、,，:：]\s*([^\n]{1,80})/g;
+    let m;
+    while ((m = re.exec(qText))) opts.push(m[1] + '. ' + m[2].trim());
+    return opts;
+  }
+
+  // 【v1.2.0】判断题识别：独立"对/错"行，或两个选项均为对/错类文本
+  function detectJudge(qText, pageOptions) {
+    if (/\n\s*(对|错)\s*\n/.test(qText)) return true;
+    if (pageOptions.length === 2) {
+      const strip = s => s.replace(/^[A-Z][.．、,，:：]\s*/, '');
+      if (/^(对|错|正确|错误|√|×)$/.test(strip(pageOptions[0])) &&
+          /^(对|错|正确|错误|√|×)$/.test(strip(pageOptions[1]))) return true;
+    }
+    return false;
+  }
+
   // 找到并点击页面中文本匹配的元素（忽略大小写、首尾空格、全角半角）
   function clickByText(targetText, multi) {
     const norm = s => s.replace(/\s+/g, '').toLowerCase();
@@ -123,6 +304,22 @@
       }
     }
     return clicked;
+  }
+
+  // 【v1.2.0】按字母点选页面选项（先按去前缀文本精确匹配，回退带前缀整行匹配）
+  function answerByLetters(letters, pageOptions) {
+    let ok = true;
+    for (const L of String(letters)) {
+      const idx = L.charCodeAt(0) - 65;
+      const opt = pageOptions[idx];
+      if (!opt) { ok = false; log('⚠️ 联网答案含超出选项范围的字母: ' + L); continue; }
+      const stripped = opt.replace(/^[A-Z][.．、,，:：]\s*/, '');
+      if (clickByText(stripped, true)) continue;
+      if (clickByText(opt, true)) continue;
+      ok = false;
+      log('⚠️ 未找到选项: ' + opt);
+    }
+    return ok;
   }
 
   // 答题：根据题库答案点击选项
@@ -158,6 +355,34 @@
     return false;
   }
 
+  // 【v1.2.0】题库未命中 → AI 联网 → 免费搜索 → 都失败提示人工
+  async function answerOnline(qText) {
+    const pageOptions = parsePageOptions(qText);
+    const isJudge = detectJudge(qText, pageOptions);
+    let ans = null;
+    if (aiConfigured()) {
+      try {
+        ans = isJudge ? await aiAskOnline(qText, pageOptions, true) : await aiAskOnline(qText, pageOptions, false);
+        if (ans) log('🤖 AI 联网作答 → ' + ans);
+      } catch (e) { log('⚠️ AI 作答失败: ' + e.message); }
+    }
+    if (!ans) {
+      try {
+        ans = await freeSearchAnswer(qText, pageOptions, isJudge);
+        if (ans) log('🔍 免费搜索命中 → ' + ans);
+      } catch (e) {}
+    }
+    if (!ans) {
+      log('❌ 题库/联网均未命中，请人工作答并考虑补充题库: ' + qText.slice(0, 40));
+      return;
+    }
+    const ok = isJudge ? clickByText(ans) : answerByLetters(ans, pageOptions);
+    answeredCount++;
+    setTimeout(() => {
+      if (ok && !clickNext()) log('✅ 已答完可见题目（共 ' + answeredCount + ' 题），请人工核对后交卷！');
+    }, 400);
+  }
+
   // 主流程：轮询检测题目 → 匹配 → 答题 → 下一题
   function tick() {
     const qText = getCurrentQuestionText();
@@ -167,20 +392,23 @@
 
     const item = matchBank(qText);
     if (!item) {
-      log('❌ 题库未匹配到本题，请人工作答并考虑补充题库: ' + qText.slice(0, 50));
+      // 【v1.2.0】题库未命中不再卡死，转联网作答
+      log('题库未命中，尝试联网作答: ' + qText.slice(0, 30));
+      answerOnline(qText);
       return;
     }
     log('🎯 匹配到题目，自动作答: ' + item.kw + ' → ' + item.ans.join('+'));
     const ok = answerQuestion(item);
     answeredCount++;
     setTimeout(() => {
-      if (ok) clickNext();
-      if (answeredCount >= 20) log('✅ 已自动作答 ' + answeredCount + ' 题，请人工核对后交卷！');
+      // 【v1.2.0】去掉硬编码 20 题：点不动"下一题"即答到最后一题
+      if (ok && !clickNext()) log('✅ 已答完可见题目（共 ' + answeredCount + ' 题），请人工核对后交卷！');
     }, 400);
   }
 
   function start() {
     log('脚本已启动，等待考试题目...');
+    ensurePanel();
     setInterval(tick, 1500);
     // 立即跑一次
     setTimeout(tick, 800);

@@ -1,8 +1,8 @@
 ﻿// ==UserScript==
-// @name         🥇【子川助手 v2.4.0】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
+// @name         🥇【子川助手 v2.5.0】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
 // @namespace    http://tampermonkey.net/
-// @version      2.4.0
-// @description  适配华医网 2026.8.24 最新改版（v2.2.3 非油猴环境版本号修复；v2.2.2 修复课程页 iframe 重复面板；v2.1.1 面板增强+自动勾选协议；v2.1.0 登录页自动填充解锁+视频连播修复）
+// @version      2.5.0
+// @description  适配华医网 2026.11 最新页面（v2.5.0 互动病例自动答题+联网搜答案+4/6/8 倍速；v2.4.1 根除倍速「不能拖拽」提示弹窗）
 // @author       四创作者：Arthurfsy2   三创作者：Mriio   二创作者：境界程序员   原创作者：Dr.S
 // @license      AGPL License
 // @match        *://*.91huayi.com/course_ware/course_ware_polyv.aspx?*
@@ -20,9 +20,11 @@
 // 脚本版本号（单一来源）。油猴环境优先读 GM_info；
 // 通过自动化框架（Playwright/WorkBuddy 等）注入时 GM_info 不存在，回退到此常量。
 // ⚠️ 修改时需与顶部 @version 及 @name 中的版本号保持一致。
-var HYU_VERSION = "2.4.0";
+var HYU_VERSION = "2.5.0";
 
 var newupdate =
+  "2026.11.26 v2.5.0 新增 4x/6x/8x 高倍速；新增联网搜答案（免费搜索+可选AI接口）；新增互动病例(case.91huayi.com)自动答题+步进\n" +
+  "2026.11.26 v2.4.1 修复倍速播放弹「不能拖拽」温馨提示（页面改版后旧关闭逻辑失效，现强制隐藏+适配新版按钮）\n" +
   "2026.11.26 v2.4.0 静音双保险；面板新增课程进度+答案库导出导入；刷完系统通知\n" +
   "2026.8.27 v2.2.3 修复非油猴环境注入时面板版本号显示错误\n" +
   "2026.8.27 v2.2.2 修复课程页出现多个面板（脚本不再注入 iframe）\n" +
@@ -470,7 +472,16 @@ function __hyInit__() {
     if (tixingEl)
       tixingEl.innerHTML =
         "当前网址已适配ヾ(๑╹◡╹)ﾉ&quot<br>失效请赞赏联系&nbsp&nbspε(┬┬﹏┬┬)3";
-    if (urlTip == "face.aspx") {
+    // 【v2.5.0】互动病例（case.91huayi.com）——注意其 URL 查询串含未编码的
+    // backUrl=http://...，urlTip 的 split("/") 计算会被干扰，故改用 hostname 判定
+    if (location.hostname.indexOf("case.91huayi.com") !== -1) {
+      console.log("当前任务: 互动病例自动学习");
+      var caseTipEl = document.querySelector("[id='tixing']");
+      if (caseTipEl)
+        caseTipEl.innerHTML =
+          "互动病例自动答题+步进中ヾ(๑╹◡╹)ﾉ<br>答错不卡流程，参考答案自动入库";
+      caseInteractiveStart();
+    } else if (urlTip == "face.aspx") {
       //刷脸认证页面
       console.log("当前任务: 刷脸认证");
       huayi.faceAuth();
@@ -610,6 +621,7 @@ function __hyInit__() {
           }, 1500);
         },
         seeVideo: function (e) {
+          suppressProcessbarTip(); // 【v2.4.1】根除「不能拖拽」提示弹窗（倍速跳跃必触发，详见函数注释）
           var tr = localStorage.getItem(keyPlayRate);
           //console.log("存储读取" + tr);//读取倍速
           //var playRateNow = tr ? tr : vSpeed;
@@ -768,7 +780,7 @@ function __hyInit__() {
             startWatchEnd(); //【修复 2026.8.24】启动本地播放完成检测（不依赖华医网状态翻转）
           };
         },
-        doTest: function () {
+        doTest: async function () {
           var questions = JSON.parse(localStorage.getItem(keyTest)) || {};
           var qRightAnswer =
             JSON.parse(localStorage.getItem(keyRightAnswer)) || {};
@@ -777,6 +789,78 @@ function __hyInit__() {
           }
           var qTestAnswer = {};
           var index = 0;
+
+          // 【v2.5.0】联网预答：只对「答案库没有 + 从未试错过」的题目联网作答
+          // （重考时已试错过的题继续试错轮转，避免联网答案与试错轮转打架）。
+          // 优先 AI（已配置），失败/未配置自动走免费搜索；两者都拿不到则纯试错。
+          var aiAnswers = {};
+          try {
+            var tables = document.querySelectorAll(
+              "table[class='tablestyle']",
+            );
+            var askList = [];
+            for (var ti = 0; ti < tables.length; ti++) {
+              var tq = null;
+              try {
+                tq = tables[ti]
+                  .querySelector(".q_name")
+                  .innerText.substring(2)
+                  .replace(/\s*/g, "");
+              } catch (e) {
+                continue;
+              }
+              if (qRightAnswer.hasOwnProperty(tq)) continue;
+              if (questions.hasOwnProperty(tq)) continue;
+              var labels = tables[ti].getElementsByTagName("label");
+              var opts = [];
+              for (var oi = 0; oi < labels.length; oi++) {
+                opts.push((labels[oi].innerText || "").trim());
+              }
+              if (opts.length > 1) askList.push({ q: tq, opts: opts });
+            }
+            if (askList.length) {
+              console.log(
+                "【子川助手】对 " +
+                  askList.length +
+                  " 道未知答案题目联网作答（AI/免费搜索）...",
+              );
+              for (var ki = 0; ki < askList.length; ki++) {
+                var gotAns = null;
+                if (aiConfigured()) {
+                  try {
+                    gotAns = await aiAskChoice(askList[ki].q, askList[ki].opts);
+                    console.log(
+                      "【子川助手·AI】第 " + (ki + 1) + " 题 → " + gotAns,
+                    );
+                  } catch (e) {
+                    console.log(
+                      "【子川助手·AI】第 " +
+                        (ki + 1) +
+                        " 题失败: " +
+                        e.message,
+                    );
+                  }
+                }
+                if (!gotAns) {
+                  try {
+                    var sAns = await freeSearchAnswer(
+                      askList[ki].q,
+                      askList[ki].opts,
+                    );
+                    if (sAns) {
+                      gotAns = sAns.charAt(0);
+                      console.log(
+                        "【子川助手·搜索】第 " + (ki + 1) + " 题命中 → " + gotAns,
+                      );
+                    }
+                  } catch (e) {}
+                }
+                if (gotAns) aiAnswers[askList[ki].q] = gotAns;
+              }
+            }
+          } catch (e) {
+            console.log("【子川助手】联网预答异常，全部回退试错: " + e.message);
+          }
 
           while (true) {
             var question = document.querySelectorAll(
@@ -836,7 +920,14 @@ function __hyInit__() {
                   element.click();
                 }
               } else {
-                if (questions.hasOwnProperty(q)) {
+                if (aiAnswers.hasOwnProperty(q)) {
+                  // 【v2.5.0】AI 联网答案作为试错的起点：答对随考试通过记入答案库；
+                  // 答错则重考时 getNextChoice 自动切下一项，试错流程无缝接手
+                  questions[q] = aiAnswers[q];
+                  console.log(
+                    "【子川助手·AI】" + q.slice(0, 24) + "… → 选择 " + aiAnswers[q],
+                  );
+                } else if (questions.hasOwnProperty(q)) {
                   questions[q] = getNextChoice(questions[q]); //通过Unicode数字+1切换到下一个选项，返回的是字母选项
                   //console.log("不知道答案:"+ q+"，测试："+questions[q]);
                 } else {
@@ -1360,6 +1451,242 @@ function __hyInit__() {
         } catch (e) {}
       }
     }
+
+    // 【v2.4.1】根除倍速播放时反复弹出的「不能拖拽」温馨提示。
+    // 页面检测机制（2026.11 实测 polyv 页）：s2j_onPlayerInitOver 里给 polyv 挂了
+    // videoSeeked 监听——每次 seek 完成后，只要 currentTime ≥ 已播最大时长-3 就执行
+    // $("#div_processbar_tip").show()。本脚本倍速的本质是每 250ms 把 currentTime
+    // 向前跳一次（playbackRate 恒为 1，躲开 timerSSS 限速检测），于是每次跳跃都会
+    // 命中该检测 → 弹窗反复弹出甚至常驻。
+    // 对策：注入 CSS !important 强制隐藏该弹窗（jQuery .show() 的内联 display:block
+    // 压不过 !important）。播放、进度记账（timerPlayMax 每 1.5s 写 localStorage）、
+    // 学时上报均不受影响；killsendQuestion3 轮询里另配 DOM 兜底关闭。
+    function suppressProcessbarTip() {
+      if (document.getElementById("__hyu_tip_css")) return;
+      try {
+        var st = document.createElement("style");
+        st.id = "__hyu_tip_css";
+        st.textContent = "#div_processbar_tip{display:none !important;}";
+        (document.head || document.documentElement).appendChild(st);
+        console.log(
+          "【子川助手】已屏蔽「不能拖拽」提示弹窗（倍速跳跃会触发 videoSeeked 检测）",
+        );
+      } catch (e) {}
+      // 双保险：页面内联脚本的 function 声明会覆盖 document-start 阶段的空函数占位，
+      // 此处（DOMContentLoaded 时机）再压一次，确保倍速期间服务端进度轮询返回异常码时
+      // （blockAbnormalPlugin 分支）也不会销毁播放器。
+      try {
+        window.blockAbnormalPlugin = function () {};
+      } catch (e) {}
+    }
+
+    // ════════ 【v2.5.0】AI 联网答题（OpenAI 兼容 Chat Completions）════════
+    // 配置存 localStorage（hyu_ai_base / hyu_ai_key / hyu_ai_model），由面板
+    // 「AI 联网答题」区的按钮写入。三个配置缺一即视为未配置，所有调用点自动
+    // 回退原有逻辑（答案库 → 试错）。接口需支持浏览器跨域（CORS），
+    // OpenAI 及大多数兼容服务默认支持。
+    function aiConfigured() {
+      try {
+        return !!(
+          localStorage.getItem("hyu_ai_base") &&
+          localStorage.getItem("hyu_ai_key") &&
+          localStorage.getItem("hyu_ai_model")
+        );
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // 把题目+选项发给 AI，返回正确选项字母（单选如 "A"；multi=true 时返回多个如 "ABCD"）。
+    // 失败抛异常，由调用方回退。
+    async function aiAskChoice(question, optionTexts, multi) {
+      var base = (localStorage.getItem("hyu_ai_base") || "").replace(/\/+$/, "");
+      var promptTxt =
+        "你正在帮助用户完成医学继续教育课程测试，请选出正确选项。\n" +
+        "题目：" +
+        question +
+        "\n选项：\n" +
+        optionTexts
+          .map(function (t, i) {
+            return String.fromCharCode(65 + i) + "、" + t;
+          })
+          .join("\n") +
+        "\n只输出正确选项的字母" +
+        (multi
+          ? "（这是多选题，可能有多个正确选项，把所有正确字母连在一起输出，如 ABCD）"
+          : "（单选题，只输出一个字母）") +
+        "，不要输出任何其他内容。";
+      var ctrl = new AbortController();
+      var to = setTimeout(function () {
+        ctrl.abort();
+      }, 20000);
+      var res;
+      try {
+        res = await fetch(base + "/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + localStorage.getItem("hyu_ai_key"),
+          },
+          body: JSON.stringify({
+            model: localStorage.getItem("hyu_ai_model"),
+            messages: [{ role: "user", content: promptTxt }],
+            temperature: 0,
+          }),
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(to);
+      }
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      var data = await res.json();
+      var content =
+        (data.choices &&
+          data.choices[0] &&
+          data.choices[0].message &&
+          data.choices[0].message.content) ||
+        "";
+      if (multi) {
+        var letters = String(content).toUpperCase().match(/[A-Z]/g);
+        if (!letters || !letters.length)
+          throw new Error("AI 未返回选项字母: " + String(content).slice(0, 50));
+        // 按选项范围过滤（去掉选项之外的字母，如解析文本里的无关字母）
+        var maxIdx = optionTexts.length - 1;
+        var filtered = [];
+        for (var li = 0; li < letters.length; li++) {
+          var code = letters[li].charCodeAt(0) - 65;
+          if (code >= 0 && code <= maxIdx && filtered.indexOf(letters[li]) === -1)
+            filtered.push(letters[li]);
+        }
+        if (!filtered.length)
+          throw new Error("AI 字母不在选项范围内: " + letters.join(""));
+        return filtered.join("");
+      }
+      var m = String(content).toUpperCase().match(/\b([A-Z])\b/);
+      if (!m)
+        throw new Error("AI 未返回选项字母: " + String(content).slice(0, 50));
+      return m[1];
+    }
+
+    // 课堂问答用：把 AI 返回的字母映射到选项下标（优先按选项文本首字母匹配）
+    function aiPickOptionIndex(letter, opts) {
+      letter = (letter || "").toUpperCase();
+      for (var i = 0; i < opts.length; i++) {
+        if (opts[i].text.toUpperCase().charAt(0) === letter) return i;
+      }
+      var code = letter.charCodeAt(0) - 65;
+      if (code >= 0 && code < opts.length) return code;
+      return -1;
+    }
+
+    // ════════ 【v2.5.0】免费联网搜答案（无需任何 API Key）════════
+    // 思路：通过公共 CORS 代理抓 Bing/百度搜索结果页，从摘要文本中提取
+    // 「正确答案：X」模式。继教题目在网上题库重复度高，命中率可观；
+    // 找不到时返回 null，调用方回退兜底逻辑。免费代理不稳定属正常，
+    // 双引擎+双代理轮流尝试，单请求 8 秒超时。
+    async function fetchViaProxy(targetUrl, timeoutMs) {
+      var proxies = [
+        function (u) {
+          return "https://api.allorigins.win/raw?url=" + encodeURIComponent(u);
+        },
+        function (u) {
+          return "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u);
+        },
+      ];
+      for (var pi = 0; pi < proxies.length; pi++) {
+        var ctrl = new AbortController();
+        var to = setTimeout(function () {
+          ctrl.abort();
+        }, timeoutMs || 8000);
+        try {
+          var res = await fetch(proxies[pi](targetUrl), { signal: ctrl.signal });
+          clearTimeout(to);
+          if (!res.ok) continue;
+          var text = await res.text();
+          if (text && text.length > 500) return text;
+        } catch (e) {
+          clearTimeout(to);
+        }
+      }
+      return null;
+    }
+
+    // 从搜索结果 HTML 提取纯文本
+    function searchHtmlToText(html) {
+      return String(html)
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&[a-z]+;/gi, " ")
+        .replace(/\s+/g, " ");
+    }
+
+    // 在文本中找「答案」模式，返回字母串（"B" 或 "ABCD"）；校验字母在选项范围内
+    function extractAnswerPattern(text, optionCount) {
+      if (!text) return null;
+      var maxLetter = String.fromCharCode(65 + optionCount - 1);
+      // 优先匹配「正确答案/参考答案/答案」后跟字母
+      var patterns = [
+        /(?:正确答案|参考答案|【答案】|答案)\s*[：:是为于]*\s*([A-Z]{1,6})/,
+      ];
+      for (var pi = 0; pi < patterns.length; pi++) {
+        var m = text.match(patterns[pi]);
+        if (!m) continue;
+        var letters = m[1].split("").filter(function (L) {
+          return L >= "A" && L <= maxLetter;
+        });
+        if (letters.length) {
+          // 去重保序
+          var uniq = [];
+          for (var i = 0; i < letters.length; i++) {
+            if (uniq.indexOf(letters[i]) === -1) uniq.push(letters[i]);
+          }
+          return uniq.join("");
+        }
+      }
+      return null;
+    }
+
+    // 免费搜答案主入口：返回 "B"/"ABCD" 或 null。
+    // ⚠️ 依赖境外公共 CORS 代理（allorigins/codetabs），大陆网络环境多数不可达——
+    // 故默认关闭（hyu_search_on=1 才启用，面板 AI 区的「搜索」开关控制），
+    // 避免每题白白等待 30 秒代理超时。网络可达（如公司专线/代理环境）时打开即可。
+    async function freeSearchAnswer(question, optionTexts) {
+      try {
+        if (localStorage.getItem("hyu_search_on") !== "1") return null;
+      } catch (e) {
+        return null;
+      }
+      var query = String(question).slice(0, 60) + " 答案";
+      var engines = [
+        "https://www.bing.com/search?q=",
+        "https://www.baidu.com/s?wd=",
+      ];
+      for (var ei = 0; ei < engines.length; ei++) {
+        var html = await fetchViaProxy(engines[ei] + encodeURIComponent(query));
+        if (!html) continue;
+        var text = searchHtmlToText(html);
+        // 先确认摘要里确实包含题干片段（防止乱匹配别的题）
+        var qHead = String(question).replace(/\s+/g, "").slice(0, 15);
+        if (qHead && text.replace(/\s+/g, "").indexOf(qHead) === -1) continue;
+        var ans = extractAnswerPattern(text, optionTexts.length);
+        if (ans) {
+          console.log(
+            "【子川助手·搜索】第 " +
+              (ei + 1) +
+              " 个引擎命中答案: " +
+              ans +
+              "（题干: " +
+              String(question).slice(0, 20) +
+              "…）",
+          );
+          return ans;
+        }
+      }
+      return null;
+    }
+
     async function examherftest() {
       //考试按钮激活状态检测
       // 跳转冷却期内或已在处理中，直接跳过
@@ -1499,13 +1826,22 @@ function __hyInit__() {
           console.log(err);
         }
         try {
-          if (
-            $("button[onclick='closeProcessbarTip()']").length &&
-            $("button[onclick='closeProcessbarTip()']").length > 0 &&
-            $("div[id='div_processbar_tip']").css("display") == "block"
-          ) {
+          // 【v2.4.1】2026.11 改版：旧版关闭按钮 button[onclick='closeProcessbarTip()']
+          // 已不存在，新版是 input.rig_btn（知道了）和 img.colse_btn（✕），均为内联
+          // onclick 直接 hide()。正常情况下弹窗已被 suppressProcessbarTip() 的 CSS
+          // 强制隐藏（computed display 恒为 none），此处仅为该 CSS 失效时的兜底。
+          var $tipDlg = $("div[id='div_processbar_tip']");
+          if ($tipDlg.length && $tipDlg.css("display") == "block") {
             console.log("检测到温馨提示对话框（不能拖拽），尝试跳过");
-            $("button[onclick='closeProcessbarTip()']").click();
+            if (
+              $("button[onclick='closeProcessbarTip()']").length &&
+              $("button[onclick='closeProcessbarTip()']").length > 0
+            ) {
+              $("button[onclick='closeProcessbarTip()']").click();
+            } else {
+              $tipDlg.find("input.rig_btn, img.colse_btn").trigger("click");
+              if ($tipDlg.css("display") == "block") $tipDlg.hide();
+            }
           }
         } catch (err) {
           console.log(err);
@@ -1771,6 +2107,26 @@ function __hyInit__() {
                     <span id="hyu-ans-import" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">导入 JSON</span>
                 </div>
             </div>
+            <div id="hyu-ai-section" style="
+                font-size: 13px;
+                color: #333;
+                line-height: 1.6;
+                padding: 10px 12px;
+                background: #fafafa;
+                border-radius: 4px;
+                border: 1px solid #e8e8e8;
+                margin-bottom: 10px;
+            ">
+                <div style="font-weight:bold;margin-bottom:6px;color:#555;">AI 联网答题（可选）</div>
+                <div id="hyu-ai-status" style="font-size:12px;color:#666;">读取中…</div>
+                <div style="display:flex;gap:6px;margin-top:6px;">
+                    <span id="hyu-ai-config" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">配置</span>
+                    <span id="hyu-ai-test" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">测试</span>
+                    <span id="hyu-ai-clear" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">清除</span>
+                    <span id="hyu-search-toggle" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;" title="免费联网搜答案（依赖公共代理，网络不通自动跳过）">搜索:关</span>
+                </div>
+                <div style="font-size:11px;color:#999;margin-top:4px;">考试/课堂问答/互动病例自动联网作答；未配置或失败自动回退答案库+试错。免费搜索走公共代理（大陆网络多不通，默认关）</div>
+            </div>
             <div id="speedSection" style="
                 font-size: 13px;
                 color: #333;
@@ -1787,6 +2143,9 @@ function __hyInit__() {
                     <span class="speedBtn" data-rate="1.5" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">1.5x</span>
                     <span class="speedBtn" data-rate="2" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">2x</span>
                     <span class="speedBtn" data-rate="3" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">3x</span>
+                    <span class="speedBtn" data-rate="4" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">4x</span>
+                    <span class="speedBtn" data-rate="6" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">6x</span>
+                    <span class="speedBtn" data-rate="8" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">8x</span>
                 </div>
             </div>
             <div id="hyu-opacity-section" style="
@@ -1967,6 +2326,115 @@ function __hyInit__() {
           };
         })(speedBtns[s]);
       }
+
+      // ====== 【v2.5.0】AI 联网答题配置 ======
+      function refreshAiStatus() {
+        var el = document.getElementById("hyu-ai-status");
+        if (!el) return;
+        if (aiConfigured()) {
+          el.textContent =
+            "已配置：" +
+            localStorage.getItem("hyu_ai_model") +
+            "（将联网作答）";
+          el.style.color = "#2e7d32";
+        } else {
+          el.textContent = "未配置（答案库 + 试错作答）";
+          el.style.color = "#666";
+        }
+        var st2 = document.getElementById("hyu-search-toggle");
+        if (st2) {
+          var sOn = false;
+          try {
+            sOn = localStorage.getItem("hyu_search_on") === "1";
+          } catch (e) {}
+          st2.textContent = "搜索:" + (sOn ? "开" : "关");
+          st2.style.background = sOn ? "#1976d2" : "#e0e0e0";
+          st2.style.color = sOn ? "#fff" : "#555";
+        }
+      }
+      var searchToggleBtn = document.getElementById("hyu-search-toggle");
+      if (searchToggleBtn) {
+        searchToggleBtn.onclick = function () {
+          var on = false;
+          try {
+            on = localStorage.getItem("hyu_search_on") === "1";
+            localStorage.setItem("hyu_search_on", on ? "0" : "1");
+          } catch (e) {}
+          refreshAiStatus();
+          console.log(
+            "【子川助手】免费搜索已" +
+              (on ? "关闭" : "开启") +
+              "（走公共代理，网络不通自动跳过）",
+          );
+        };
+      }
+      var aiCfgBtn = document.getElementById("hyu-ai-config");
+      if (aiCfgBtn) {
+        aiCfgBtn.onclick = function () {
+          var base = prompt(
+            "AI 接口地址（OpenAI 兼容，填到 /v1 为止，如 https://api.openai.com/v1）：",
+            localStorage.getItem("hyu_ai_base") || "https://api.openai.com/v1",
+          );
+          if (base === null) return;
+          var key = prompt(
+            "API Key（仅保存在本浏览器，用于联网答题）：",
+            localStorage.getItem("hyu_ai_key") || "",
+          );
+          if (key === null) return;
+          var model = prompt(
+            "模型名（建议用支持联网搜索或知识面广的模型）：",
+            localStorage.getItem("hyu_ai_model") || "",
+          );
+          if (model === null) return;
+          try {
+            localStorage.setItem("hyu_ai_base", base.trim());
+            localStorage.setItem("hyu_ai_key", key.trim());
+            localStorage.setItem("hyu_ai_model", model.trim());
+          } catch (e) {}
+          refreshAiStatus();
+        };
+      }
+      var aiTestBtn = document.getElementById("hyu-ai-test");
+      if (aiTestBtn) {
+        aiTestBtn.onclick = async function () {
+          if (!aiConfigured()) {
+            alert("请先点「配置」填好接口地址、Key 和模型名");
+            return;
+          }
+          aiTestBtn.textContent = "测试中…";
+          try {
+            var letter = await aiAskChoice("1+1=?", [
+              "A. 1",
+              "B. 2",
+              "C. 3",
+              "D. 4",
+            ]);
+            alert("AI 接口正常 ✓（测试题返回：" + letter + "，应为 B）");
+          } catch (e) {
+            alert(
+              "AI 调用失败：" +
+                e.message +
+                "\n常见原因：接口不支持浏览器跨域(CORS)、Key 无效、地址填错。\n" +
+                "配置正确前，考试仍会用答案库+试错作答，不影响使用。",
+            );
+          }
+          aiTestBtn.textContent = "测试";
+        };
+      }
+      var aiClearBtn = document.getElementById("hyu-ai-clear");
+      if (aiClearBtn) {
+        aiClearBtn.onclick = function () {
+          try {
+            ["hyu_ai_base", "hyu_ai_key", "hyu_ai_model"].forEach(function (
+              k,
+            ) {
+              localStorage.removeItem(k);
+            });
+          } catch (e) {}
+          refreshAiStatus();
+        };
+      }
+      refreshAiStatus();
 
       // ====== 【v2.4.0】课程进度显示（视频页侧边栏可读时每 15 秒刷新） ======
       var progressEl = document.getElementById("hyu-progress-text");
@@ -2866,6 +3334,7 @@ function __hyInit__() {
             if (qaState.widget) qaLog("弹窗已消失（答对），本次课堂问答完成");
             qaState.widget = null;
             qaState.triedIndex = -1;
+            qaState.aiPending = false;
             return;
           }
           var opts = qaExtractOptions(w);
@@ -2895,10 +3364,39 @@ function __hyInit__() {
               if (sb) { sb.click(); qaState.lastSubmitAt = Date.now(); }
               return;
             }
+            // 【v2.5.0】AI 联网作答（异步，本轮先返回，结果回来后再点击提交；
+            // 答对弹窗消失即记为正确答案，答错下轮试错自动接手）
+            if (aiConfigured()) {
+              qaState.aiPending = true;
+              var aiOpts = opts.map(function (o) { return o.text; });
+              aiAskChoice(q, aiOpts)
+                .then(function (letter) {
+                  qaState.aiPending = false;
+                  if (qaState.widget !== w) return; // 弹窗已消失或已切换
+                  var aiIdx = aiPickOptionIndex(letter, opts);
+                  if (aiIdx < 0) {
+                    qaLog("AI 返回无法匹配的选项: " + letter + "，下轮试错");
+                    return;
+                  }
+                  qaLog("AI 联网选择第 " + (aiIdx + 1) + " 项: " + opts[aiIdx].text);
+                  qaState.triedIndex = aiIdx;
+                  try { opts[aiIdx].el.click(); } catch (e) { qaLog("点击选项异常: " + e.message); }
+                  var sb2 = qaFindSubmit(w);
+                  if (sb2) { sb2.click(); qaState.lastSubmitAt = Date.now(); }
+                  mem[q] = aiIdx; // 答对则保留为正确答案；答错下轮试错会覆盖
+                  try { localStorage.setItem(qaKey, JSON.stringify(mem)); } catch (e) {}
+                })
+                .catch(function (e) {
+                  qaState.aiPending = false;
+                  qaLog("AI 作答失败，回退试错: " + e.message);
+                });
+              return;
+            }
             qaState.triedIndex = -1;
           }
 
           // 弹窗仍在且过判定时间 → 上一个答案错了 → 试下一个
+          if (qaState.aiPending) return; // 【v2.5.0】AI 正在联网作答，先挂起试错
           qaState.triedIndex++;
           if (qaState.triedIndex >= opts.length) {
             // 所有选项都试过还错（弹窗还没消失）→ 不再循环，提示用户
@@ -2930,6 +3428,257 @@ function __hyInit__() {
           console.log("【子川助手·课堂问答】异常: " + e.message);
         }
       }, 2000);
+    }
+
+    // ════════ 【v2.5.0】互动病例（case.91huayi.com）自动答题 + 步进 ════════
+    // 实测机制（2026.11）：
+    //  ① 题目一次性提交——提交后选项 locked、按钮变 done，不能重试 → 试错不可行；
+    //  ② 反馈直接给出「参考答案是 X」，可解析入答案库（重学同题直接命中）；
+    //  ③ 答错不卡流程（全部提交即可进下一步），只影响正确率。
+    // 答题优先链：答案库 → AI（已配置）→ 免费联网搜索 → 兜底（单选A/多选全选，保流程推进）。
+    var caseTimer = null;
+    var caseKey = "JJ_Case_Answer";
+
+    function caseLog(msg) {
+      console.log("【子川助手·互动病例】" + msg);
+      try {
+        var arr = JSON.parse(localStorage.getItem("JJ_Case_Log")) || [];
+        arr.push(
+          new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(11, 19) +
+            " " +
+            msg,
+        );
+        if (arr.length > 20) arr = arr.slice(-20);
+        localStorage.setItem("JJ_Case_Log", JSON.stringify(arr));
+      } catch (e) {}
+    }
+
+    function caseNorm(s) {
+      return String(s || "")
+        .replace(/\s+/g, "")
+        .trim();
+    }
+
+    // 收集一题的选项 [{letter, el, text}]（单选 .qopt/.okey；多选 .multi-opt/.ckbox）
+    // 选项标记可能是"✓"等非字母（判断题），用索引字母兜底，保证可选中提交
+    function caseGetOptions(block) {
+      var out = [];
+      var singles = block.querySelectorAll(".qopt");
+      var multis = block.querySelectorAll(".multi-opt");
+      function normLetter(raw, idx) {
+        raw = String(raw || "").trim();
+        return /^[A-Z]$/.test(raw) ? raw : String.fromCharCode(65 + idx);
+      }
+      if (singles.length) {
+        for (var i = 0; i < singles.length; i++) {
+          out.push({
+            letter: normLetter(
+              (singles[i].querySelector(".okey") || {}).textContent,
+              i,
+            ),
+            el: singles[i],
+            text: caseNorm(singles[i].textContent).replace(/^[A-Z]/, ""),
+          });
+        }
+      } else if (multis.length) {
+        for (var j = 0; j < multis.length; j++) {
+          out.push({
+            letter: normLetter(
+              (multis[j].querySelector(".ckbox") || {}).textContent,
+              j,
+            ),
+            el: multis[j],
+            text: caseNorm(multis[j].textContent).replace(/^[A-Z]/, ""),
+          });
+        }
+      }
+      return out;
+    }
+
+    // 按字母选选项并提交（letters: "E" / "ABCD"）；新题初始必为未选态，直接点击目标项
+    function casePickAndSubmit(block, letters) {
+      try {
+        var opts = caseGetOptions(block);
+        var want = String(letters || "")
+          .toUpperCase()
+          .replace(/[^A-Z]/g, "");
+        if (!want) return;
+        var clicked = 0;
+        for (var i = 0; i < opts.length; i++) {
+          if (want.indexOf(opts[i].letter) !== -1) {
+            opts[i].el.click();
+            clicked++;
+          }
+        }
+        if (!clicked) return;
+        // 等 Vue 更新选中态后再提交
+        setTimeout(function () {
+          try {
+            var btn = block.querySelector("button.q-submit-btn");
+            if (btn && !btn.className.includes("done")) btn.click();
+          } catch (e) {}
+        }, 350);
+      } catch (e) {
+        caseLog("提交异常: " + e.message);
+      }
+    }
+
+    // 解析已提交题目的反馈「参考答案」写入答案库
+    function caseHarvestAnswers() {
+      try {
+        var mem = JSON.parse(localStorage.getItem(caseKey)) || {};
+        var blocks = document.querySelectorAll(".q-block");
+        var n = 0;
+        for (var i = 0; i < blocks.length; i++) {
+          var b = blocks[i];
+          var btn = b.querySelector("button.q-submit-btn");
+          if (!btn || !btn.className.includes("done")) continue;
+          var q = caseNorm((b.querySelector(".qtxt") || {}).textContent);
+          if (!q || mem[q]) continue;
+          var fb = b.querySelector(".fb-wrap");
+          if (!fb) continue;
+          var m = (fb.textContent || "").match(
+            /参考答案是\s*([A-Z](?:\s*[、,，]\s*[A-Z])*)/,
+          );
+          if (!m) continue;
+          var ans = m[1].replace(/[^A-Z]/g, "");
+          if (ans) {
+            mem[q] = ans;
+            n++;
+          }
+        }
+        if (n) {
+          localStorage.setItem(caseKey, JSON.stringify(mem));
+          caseLog("已从反馈解析 " + n + " 道题的参考答案入库（下次学习直接命中）");
+        }
+      } catch (e) {}
+    }
+
+    // 处理本步骤所有未提交的题
+    async function caseAnswerPending() {
+      var blocks = document.querySelectorAll(".q-block");
+      var mem = {};
+      try {
+        mem = JSON.parse(localStorage.getItem(caseKey)) || {};
+      } catch (e) {}
+      for (var i = 0; i < blocks.length; i++) {
+        var b = blocks[i];
+        var btn = b.querySelector("button.q-submit-btn");
+        if (!btn || btn.className.includes("done")) continue;
+        var q = caseNorm((b.querySelector(".qtxt") || {}).textContent);
+        if (!q) continue;
+        if (b.getAttribute("data-hyu-busy")) continue; // AI/搜索处理中
+        var isMulti =
+          ((b.querySelector(".qlabel") || {}).textContent || "").indexOf(
+            "多选",
+          ) !== -1;
+        var opts = caseGetOptions(b);
+        var promptOpts = opts.map(function (o) {
+          return o.letter + "、" + o.text;
+        });
+        var that = b;
+
+        if (mem[q]) {
+          casePickAndSubmit(that, mem[q]);
+          caseLog("答案库命中 → " + mem[q] + "（" + q.slice(0, 18) + "…）");
+          continue;
+        }
+
+        // 异步作答（AI → 免费搜索 → 兜底），标记 busy 防重复处理
+        that.setAttribute("data-hyu-busy", "1");
+        (async function (block, question, multi, options, optTexts) {
+          var answered = false;
+          if (aiConfigured()) {
+            try {
+              var aiAns = await aiAskChoice(question, optTexts, multi);
+              casePickAndSubmit(block, aiAns);
+              caseLog("AI 联网作答 → " + aiAns);
+              answered = true;
+            } catch (e) {
+              caseLog("AI 作答失败: " + e.message);
+            }
+          }
+          if (!answered) {
+            try {
+              var sAns = await freeSearchAnswer(question, optTexts);
+              if (sAns) {
+                if (multi) {
+                  casePickAndSubmit(block, sAns);
+                } else {
+                  casePickAndSubmit(block, sAns.charAt(0));
+                }
+                caseLog("免费搜索命中 → " + (multi ? sAns : sAns.charAt(0)));
+                answered = true;
+              }
+            } catch (e) {
+              caseLog("免费搜索失败: " + e.message);
+            }
+          }
+          if (!answered) {
+            // 兜底：保流程推进（答错不卡步骤，参考答案会自动入库，下次学习命中）
+            var fallback = multi
+              ? options
+                  .map(function (o) {
+                    return o.letter;
+                  })
+                  .join("")
+              : "A";
+            casePickAndSubmit(block, fallback);
+            caseLog(
+              "答案库/AI/搜索均未命中，兜底提交 " +
+                fallback +
+                "（参考答案将入库，重学时自动答对）",
+            );
+          }
+          block.removeAttribute("data-hyu-busy");
+        })(that, q, isMulti, opts, promptOpts);
+      }
+    }
+
+    // 主循环：每 2.5 秒 —— 收割参考答案 → 答题 → 全部完成后自动步进
+    function caseInteractiveStart() {
+      caseLog("互动病例自动学习启动");
+      var lastNextAt = 0;
+      caseTimer = setInterval(async function () {
+        try {
+          caseHarvestAnswers();
+          var blocks = document.querySelectorAll(".q-block");
+          var unfinished = 0;
+          for (var i = 0; i < blocks.length; i++) {
+            var btn = blocks[i].querySelector("button.q-submit-btn");
+            if (btn && !btn.className.includes("done")) unfinished++;
+          }
+          if (unfinished > 0) {
+            await caseAnswerPending();
+            return; // 等下一轮确认全部提交完成
+          }
+          // 无未完成题目（或本步骤无题）→ 步进
+          if (Date.now() - lastNextAt < 2500) return;
+          var btns = Array.from(document.querySelectorAll("button"));
+          var next = btns.find(function (b) {
+            return b.offsetParent && /→$/.test((b.textContent || "").trim());
+          });
+          if (next) {
+            lastNextAt = Date.now();
+            next.click();
+            return;
+          }
+          // 总结页：完成按钮（无「→」时）
+          var done = btns.find(function (b) {
+            return (
+              b.offsetParent &&
+              /完成/.test((b.textContent || "").trim()) &&
+              !/已完成/.test(b.className)
+            );
+          });
+          if (done) {
+            done.click();
+            caseLog("已点击完成按钮，互动病例学习结束");
+          }
+        } catch (e) {
+          console.log("【子川助手·互动病例】轮询异常: " + e.message);
+        }
+      }, 2500);
     }
 
     //---------------------------------全局函数区end------------------------------//
