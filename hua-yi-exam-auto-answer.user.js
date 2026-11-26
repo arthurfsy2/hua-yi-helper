@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         🧠 华医网统一考核自动答题助手（内置2026公需课题库）
+// @name         🧠 子川助手·统一考核自动答题 v1.1.0（内置2026公需课题库）
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
-// @description  华医网统一课程考核(sdnew.91huayi.com)自动答题：内置2026公需课《人工智能赋能高质量发展》20题题库，自动匹配并点击答案、自动切题。不自动交卷，答完后提示人工核对。
+// @version      1.1.0
+// @description  子川助手配套脚本：华医网统一课程考核(sdnew.91huayi.com)自动答题，内置2026公需课《人工智能赋能高质量发展》20题题库，自动匹配并点击答案、自动切题。不自动交卷，答完后提示人工核对。
 // @author       Lin (WorkBuddy)
 // @license      AGPL License
 // @match        https://sdnew.91huayi.com/ExamInterface/ComputerExamIndex*
@@ -66,7 +66,7 @@
 
   let answeredCount = 0;
   let lastQuestionSig = '';
-  const LOG_PREFIX = '【华医网统一考核助手】';
+  const LOG_PREFIX = '【子川助手·统一考核】';
 
   function log(msg) {
     console.log(LOG_PREFIX + msg);
@@ -84,7 +84,12 @@
     const body = document.body ? document.body.innerText : '';
     // 找题型标题行之后的内容
     const m = body.match(/[一二三四五]、[^\n]*\n((?:.|\n)*?)(?:下\s*一\s*题|上\s*一\s*题|我要交卷|交卷)/);
-    return m ? m[1].trim() : '';
+    if (m) return m[1].trim();
+    // 【v1.1.0 兜底】题型标题结构变化（官方加 banner/改标题格式）导致主正则失效时，
+    // 改取第一个"题号+题干"行（如 "1 人才培养……"）。每题文本不同——tick 的 sig 去重
+    // 依赖这一点；matchBank 用 includes 匹配关键词，题干行同样能命中题库。
+    const n = body.match(/(?:^|\n)\s*(\d{1,3})\s*[、.．,，]?\s*([^\n]{8,120})/);
+    return n ? (n[1] + ' ' + n[2]).trim() : '';
   }
 
   // 匹配题库：按题干关键词

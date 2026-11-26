@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
-// @name         🥇【华医网小助手】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
+// @name         🥇【子川助手 v2.4.0】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
 // @namespace    http://tampermonkey.net/
-// @version      2.3.0
+// @version      2.4.0
 // @description  适配华医网 2026.8.24 最新改版（v2.2.3 非油猴环境版本号修复；v2.2.2 修复课程页 iframe 重复面板；v2.1.1 面板增强+自动勾选协议；v2.1.0 登录页自动填充解锁+视频连播修复）
 // @author       四创作者：Arthurfsy2   三创作者：Mriio   二创作者：境界程序员   原创作者：Dr.S
 // @license      AGPL License
@@ -19,10 +19,11 @@
 
 // 脚本版本号（单一来源）。油猴环境优先读 GM_info；
 // 通过自动化框架（Playwright/WorkBuddy 等）注入时 GM_info 不存在，回退到此常量。
-// ⚠️ 修改时需与顶部 @version 保持一致。
-var HYU_VERSION = "2.3.0";
+// ⚠️ 修改时需与顶部 @version 及 @name 中的版本号保持一致。
+var HYU_VERSION = "2.4.0";
 
 var newupdate =
+  "2026.11.26 v2.4.0 静音双保险；面板新增课程进度+答案库导出导入；刷完系统通知\n" +
   "2026.8.27 v2.2.3 修复非油猴环境注入时面板版本号显示错误\n" +
   "2026.8.27 v2.2.2 修复课程页出现多个面板（脚本不再注入 iframe）\n" +
   "2026.8.25 v2.2.1 课堂问答自动试错答题（华医网自有组件，允许重复提交）\n" +
@@ -109,7 +110,7 @@ function __hyIsTopFrame__() {
   // 这是最关键的一步，必须在页面定义/调用它之前完成
   try {
     window.blockAbnormalPlugin = function () {};
-    _safeLog("【华医网小助手】已抢先覆盖 blockAbnormalPlugin");
+    _safeLog("【子川助手】已抢先覆盖 blockAbnormalPlugin");
   } catch (e) {}
 
   // 【核心修复】拦截 Object.defineProperty，防止页面用不可配置方式重新定义 blockAbnormalPlugin
@@ -117,7 +118,7 @@ function __hyIsTopFrame__() {
   Object.defineProperty = function (obj, prop, descriptor) {
     if (obj === window && prop === "blockAbnormalPlugin") {
       _safeLog(
-        "【华医网小助手】已拦截 blockAbnormalPlugin 的 Object.defineProperty 重定义",
+        "【子川助手】已拦截 blockAbnormalPlugin 的 Object.defineProperty 重定义",
       );
       return window;
     }
@@ -129,14 +130,14 @@ function __hyIsTopFrame__() {
   EventTarget.prototype.addEventListener = function (type, listener, options) {
     // 拦截 contextmenu 事件监听，防止考试页面禁用右键
     if (type === "contextmenu") {
-      _safeLog("【华医网小助手】已拦截右键屏蔽监听器");
+      _safeLog("【子川助手】已拦截右键屏蔽监听器");
       return;
     }
     if (this === document && type === "click") {
       var listenerStr = String(listener);
       // 扩大拦截：只要是检查 isTrusted 的 click 监听器都拦截（不限于 blockAbnormalPlugin）
       if (listenerStr.indexOf("isTrusted") !== -1) {
-        _safeLog("【华医网小助手】已拦截反脚本点击检测监听器");
+        _safeLog("【子川助手】已拦截反脚本点击检测监听器");
         return;
       }
     }
@@ -152,7 +153,7 @@ function __hyIsTopFrame__() {
       cbStr.indexOf("blockAbnormalPlugin") !== -1 &&
       cbStr.indexOf("ratePlayLimitNum") !== -1
     ) {
-      _safeLog("【华医网小助手】已拦截倍速检测定时器");
+      _safeLog("【子川助手】已拦截倍速检测定时器");
       return 0;
     }
     var id = _origSetInterval.apply(this, arguments);
@@ -190,7 +191,7 @@ function __hyIsTopFrame__() {
   window.setTimeout = function (callback, delay) {
     var cbStr = String(callback);
     if (cbStr.indexOf("blockAbnormalPlugin") !== -1) {
-      _safeLog("【华医网小助手】已拦截反脚本 setTimeout");
+      _safeLog("【子川助手】已拦截反脚本 setTimeout");
       return 0;
     }
     return _origSetTimeout.apply(this, arguments);
@@ -302,7 +303,7 @@ function __hyIsTopFrame__() {
       tip.innerHTML =
         '<span style="font-size:18px;">🔓</span>' +
         "<span>" +
-        "<b>「华医网小助手」</b> 已解除官方浏览器自动填充限制，" +
+        "<b>「子川助手」</b> 已解除官方浏览器自动填充限制，" +
         "浏览器现在可以正常保存/回填账号密码" +
         "</span>" +
         '<span id="hyu-unlock-tip-x" title="关闭" style="cursor:pointer;color:#188AAE;font-weight:700;font-size:16px;line-height:1;flex-shrink:0;padding:0 4px;">✕</span>';
@@ -360,13 +361,13 @@ function __hyInit__() {
 
     // 【登录页分流】secure/login.aspx 的自动填充解锁由顶层 IIFE 处理，这里直接返回
     if (document.getElementById("txt_user_pwd")) {
-      console.log("【华医网小助手】检测到登录页，仅启用自动填充解锁");
+      console.log("【子川助手】检测到登录页，仅启用自动填充解锁");
       return;
     }
 
     // 【hysslogin SSO 登录页】Vue 应用，直接操作 Vue 实例填账号密码
     if (location.hostname.indexOf("hysslogin") !== -1) {
-      try { HY_hyssloginHelper(); } catch (e) { console.error("【华医网小助手·hysslogin登录助手】初始化错误:", e); }
+      try { HY_hyssloginHelper(); } catch (e) { console.error("【子川助手·hysslogin登录助手】初始化错误:", e); }
       return;
     }
 
@@ -406,7 +407,7 @@ function __hyInit__() {
       if (document.body) {
         var _dbg = document.createElement("div");
         _dbg.id = "__hy_dbg__";
-        _dbg.textContent = "华医助手已加载";
+        _dbg.textContent = "子川助手已加载";
         _dbg.style.cssText =
           "position:fixed;bottom:2px;right:2px;font-size:10px;color:#4cb0f9;z-index:99999;opacity:0.8;pointer-events:none;";
         document.body.appendChild(_dbg);
@@ -432,7 +433,7 @@ function __hyInit__() {
         body.onhelp = null;
         // 同时移除 document 级别的右键限制
         document.oncontextmenu = null;
-        console.log("【华医网小助手】已清除页面右键/复制限制");
+        console.log("【子川助手】已清除页面右键/复制限制");
       } catch (e) {}
     })();
 
@@ -505,13 +506,13 @@ function __hyInit__() {
       function tryDoTest() {
         var questions = document.querySelectorAll("table.tablestyle");
         if (questions.length > 0) {
-          console.log("【华医网小助手】考试题目已加载，开始答题");
+          console.log("【子川助手】考试题目已加载，开始答题");
           huayi.doTest();
         } else if (examRetry < 30) {
           examRetry++;
           setTimeout(tryDoTest, 500);
         } else {
-          console.log("【华医网小助手】考试题目加载超时，强制尝试");
+          console.log("【子川助手】考试题目加载超时，强制尝试");
           huayi.doTest();
         }
       }
@@ -576,7 +577,7 @@ function __hyInit__() {
       try {
         if (typeof blockAbnormalPlugin === "function") {
           window.blockAbnormalPlugin = function () {};
-          console.log("【华医网小助手】blockAbnormalPlugin 已覆盖为空函数");
+          console.log("【子川助手】blockAbnormalPlugin 已覆盖为空函数");
         }
       } catch (e) {}
       // 清除 body 上的右键/复制/帮助限制（考试页面 via 内联属性）
@@ -602,7 +603,7 @@ function __hyInit__() {
           addAnwserCopybtn();
           DelAllAnwser();
 
-          console.log("【华医网小助手】课程列表页，开始扫描待学习课程...");
+          console.log("【子川助手】课程列表页，开始扫描待学习课程...");
           // 延时确保页面完全加载后再扫描
           setTimeout(function () {
             autoEnterCourse();
@@ -624,16 +625,16 @@ function __hyInit__() {
               courseFinished = true;
               navCooldownUntil = Date.now() + 5000;
               console.log(
-                "【华医网小助手】刷新后检测到标记，检查当前课程状态...",
+                "【子川助手】刷新后检测到标记，检查当前课程状态...",
               );
               setTimeout(function () {
                 try {
                   var state = getCurrentCourseState();
                   if (state) {
-                    console.log("【华医网小助手】刷新后课程状态: " + state);
+                    console.log("【子川助手】刷新后课程状态: " + state);
                     if (state == "已完成" || state == "待考试") {
                       console.log(
-                        "【华医网小助手】确认课程已" +
+                        "【子川助手】确认课程已" +
                           state +
                           "，搜索下一个未学习/学习中课程...",
                       );
@@ -645,7 +646,7 @@ function __hyInit__() {
                         var status = getCourseStatus(lis[i]);
                         if (status === "未学习" || status === "学习中") {
                           console.log(
-                            "【华医网小助手】找到课程（" +
+                            "【子川助手】找到课程（" +
                               status +
                               "），开始学习",
                           );
@@ -676,17 +677,17 @@ function __hyInit__() {
                       }
                       if (!found) {
                         console.log(
-                          "【华医网小助手】未找到未学习或学习中课程，可能全部已完成",
+                          "【子川助手】未找到未学习或学习中课程，可能全部已完成",
                         );
                       }
                     } else {
                       console.log(
-                        "【华医网小助手】课程状态为" + state + "，继续正常播放",
+                        "【子川助手】课程状态为" + state + "，继续正常播放",
                       );
                     }
                   }
                 } catch (e) {
-                  console.log("【华医网小助手】刷新后状态检查出错: " + e);
+                  console.log("【子川助手】刷新后状态检查出错: " + e);
                 }
               }, 2000);
             }
@@ -702,7 +703,7 @@ function __hyInit__() {
 
           // 立即应用倍速（不等onload，polyv播放器可能已初始化）
           ratechg(playRateNow);
-          console.log("【华医网小助手】已触发倍速设置: " + playRateNow + "x");
+          console.log("【子川助手】已触发倍速设置: " + playRateNow + "x");
 
           window.onload = function () {
             localStorage.setItem(
@@ -724,17 +725,17 @@ function __hyInit__() {
             clock = setInterval(examherftest, 3000);
             switch (e) {
               case 1:
-                window.s2j_onPlayerInitOver();
-                {
-                  // console.log("polyv加载完毕，静音，稍后尝试触发一次播放");
-                  player?.j2s_setVolume(0);
-                  document.querySelector("video").defaultMuted = true;
-                  setTimeout(function () {
-                    try {
-                      //document.querySelector("video").volume = 0;//实际测试，主要靠这一条静音
-                      player.j2s_resumeVideo();
-                      //document.querySelector("video").muted = true;
-                      examherftest();
+                  window.s2j_onPlayerInitOver();
+                  {
+                    // console.log("polyv加载完毕，静音，稍后尝试触发一次播放");
+                    player?.j2s_setVolume(0);
+                    muteAllVideos(); // 【v2.4.0】静音双保险
+                    setTimeout(function () {
+                      try {
+                        //document.querySelector("video").volume = 0;//实际测试，主要靠这一条静音
+                        player.j2s_resumeVideo();
+                        muteAllVideos(); // 恢复播放后再压一次音量（防外部事件恢复音量）
+                        examherftest();
                       //document.querySelector("button[onclick='closeBangZhu()']").click();//关闭温馨提醒
                     } catch (error) {
                       console.log("上一段代码有误");
@@ -743,17 +744,17 @@ function __hyInit__() {
                 }
                 break;
               case 2:
-                window.on_CCH5player_ready();
-                {
-                  //console.log("CCplayer加载完毕，静音，稍后尝试触发一次播放");
-                  cc_js_Player?.setVolume(0);
-                  document.querySelector("video").defaultMuted = true;
-                  setTimeout(function () {
-                    try {
-                      //document.querySelector("video").volume = 0;//实际测试，主要靠这一条静音
-                      cc_js_Player.play().catch(function () {});
-                      //document.querySelector("video").muted = true;
-                      examherftest();
+                  window.on_CCH5player_ready();
+                  {
+                    //console.log("CCplayer加载完毕，静音，稍后尝试触发一次播放");
+                    cc_js_Player?.setVolume(0);
+                    muteAllVideos(); // 【v2.4.0】静音双保险
+                    setTimeout(function () {
+                      try {
+                        //document.querySelector("video").volume = 0;//实际测试，主要靠这一条静音
+                        cc_js_Player.play().catch(function () {});
+                        muteAllVideos(); // 恢复播放后再压一次音量（防外部事件恢复音量）
+                        examherftest();
                       //document.querySelector("button[onclick='closeBangZhu()']").click();//关闭温馨提醒
                     } catch (error) {
                       console.log("上一段代码有误");
@@ -920,7 +921,7 @@ function __hyInit__() {
           ///专用函数区结束
         },
         faceAuth: function () {
-          console.log("【华医网小助手】刷脸认证页面，确保脚本加载...");
+          console.log("【子川助手】刷脸认证页面，确保脚本加载...");
           ensurePageScripts(function () {
             // 监听页面 QR 码状态，自动处理过期刷新
             setTimeout(function () {
@@ -931,12 +932,12 @@ function __hyInit__() {
                 saoRefresh.style.display !== "none" &&
                 refreshEl
               ) {
-                console.log("【华医网小助手】检测到二维码已过期，自动刷新...");
+                console.log("【子川助手】检测到二维码已过期，自动刷新...");
                 refreshEl.click();
               }
             }, 10000);
 
-            console.log("【华医网小助手】刷脸认证页面修复完成");
+            console.log("【子川助手】刷脸认证页面修复完成");
             var tixingEl = document.querySelector("[id='tixing']");
             if (tixingEl)
               tixingEl.innerHTML = "刷脸认证页面<br>请使用掌上华医扫码";
@@ -968,7 +969,7 @@ function __hyInit__() {
           }
           if (nextBtn) {
             console.log(
-              "【华医网小助手】检测到课程进度页，找到下一课：" + nextTitle,
+              "【子川助手】检测到课程进度页，找到下一课：" + nextTitle,
             );
             setTimeout(function () {
               nextBtn.click();
@@ -991,7 +992,7 @@ function __hyInit__() {
             // 考试通过后：回到课程列表页让 auto-scan 处理
             setTimeout(function () {
               console.log(
-                "【华医网小助手】返回课程列表页，自动扫描将处理下一课程",
+                "【子川助手】返回课程列表页，自动扫描将处理下一课程",
               );
               window.location.href = window.location.origin + "/pages/cme.aspx";
             }, 1000);
@@ -1039,7 +1040,7 @@ function __hyInit__() {
     function ensurePageScripts(onReady, retryCount) {
       retryCount = retryCount || 0;
       if (retryCount > 3) {
-        console.log("【华医网小助手】脚本加载重试超过3次，刷新页面...");
+        console.log("【子川助手】脚本加载重试超过3次，刷新页面...");
         setTimeout(function () {
           location.reload();
         }, 2000);
@@ -1057,16 +1058,16 @@ function __hyInit__() {
       // 检查 jQuery
       if (typeof $ === "undefined") {
         console.log(
-          "【华医网小助手】jQuery 未加载，动态注入 (重试" + retryCount + ")...",
+          "【子川助手】jQuery 未加载，动态注入 (重试" + retryCount + ")...",
         );
         injectScript(
           "/scripts/hyjquery.min.js",
           function () {
-            console.log("【华医网小助手】jQuery 注入成功");
+            console.log("【子川助手】jQuery 注入成功");
             ensurePageScripts(onReady, 0); // 重置计数，继续检查 layer
           },
           function () {
-            console.log("【华医网小助手】jQuery 注入失败，重试...");
+            console.log("【子川助手】jQuery 注入失败，重试...");
             setTimeout(function () {
               ensurePageScripts(onReady, retryCount + 1);
             }, 1500);
@@ -1078,18 +1079,18 @@ function __hyInit__() {
       // 检查 layer.js
       if (typeof layer === "undefined") {
         console.log(
-          "【华医网小助手】layer.js 未加载，动态注入 (重试" +
+          "【子川助手】layer.js 未加载，动态注入 (重试" +
             retryCount +
             ")...",
         );
         injectScript(
           "/scripts/layer/layer.js",
           function () {
-            console.log("【华医网小助手】layer.js 注入成功");
+            console.log("【子川助手】layer.js 注入成功");
             onReady();
           },
           function () {
-            console.log("【华医网小助手】layer.js 注入失败，重试...");
+            console.log("【子川助手】layer.js 注入失败，重试...");
             setTimeout(function () {
               ensurePageScripts(onReady, retryCount + 1);
             }, 1500);
@@ -1167,7 +1168,7 @@ function __hyInit__() {
       //插入答案复制按钮
       var mainDiv = document.getElementById("main_div");
       if (!mainDiv) {
-        console.log("【华医网小助手】当前页面无 main_div，跳过答案按钮插入");
+        console.log("【子川助手】当前页面无 main_div，跳过答案按钮插入");
         return;
       }
       let alink = document.createElement("a");
@@ -1201,7 +1202,7 @@ function __hyInit__() {
       //插入清除答案按钮
       var mainDiv = document.getElementById("main_div");
       if (!mainDiv) {
-        console.log("【华医网小助手】当前页面无 main_div，跳过答案按钮插入");
+        console.log("【子川助手】当前页面无 main_div，跳过答案按钮插入");
         return;
       }
       let alink = document.createElement("a");
@@ -1273,7 +1274,7 @@ function __hyInit__() {
       _speedCurrentRate = ra;
       localStorage.setItem(keyPlayRate, ra);
       console.log(
-        "【华医网小助手】倍率调整为 " + ra + "x（currentTime跳跃模式）",
+        "【子川助手】倍率调整为 " + ra + "x（currentTime跳跃模式）",
       );
 
       // 清除旧定时器
@@ -1343,6 +1344,21 @@ function __hyInit__() {
       localStorage.removeItem(keyResult);
       localStorage.removeItem(keyTestAnswer);
       localStorage.removeItem(keyRightAnswer);
+    }
+
+    // 【v2.4.0】视频静音双保险：muted + defaultMuted + volume=0 同时设置，
+    // 防止播放器内部事件把音量拉回；video 元素缺失时安全跳过
+    // （旧代码直接 document.querySelector("video").defaultMuted = true 在元素未就绪时会抛错，
+    //   一旦抛错会中断 window.onload 后半段，导致 startWatchEnd 不启动）
+    function muteAllVideos() {
+      var videos = document.querySelectorAll("video");
+      for (var i = 0; i < videos.length; i++) {
+        try {
+          videos[i].muted = true;
+          videos[i].defaultMuted = true;
+          videos[i].volume = 0;
+        } catch (e) {}
+      }
     }
     async function examherftest() {
       //考试按钮激活状态检测
@@ -1534,7 +1550,7 @@ function __hyInit__() {
               document.querySelector("video").pause();
             } catch (e) {}
             console.log(
-              "【华医网小助手】当前课程状态为待考试，搜索学习中/未学习课程...",
+              "【子川助手】当前课程状态为待考试，搜索学习中/未学习课程...",
             );
             var lis = document.querySelectorAll("li.lis-inside-content");
             var foundLi = null;
@@ -1542,7 +1558,7 @@ function __hyInit__() {
               var st = getCourseStatus(lis[n]);
               if (st === "未学习" || st === "学习中") {
                 foundLi = lis[n];
-                console.log("【华医网小助手】找到课程（" + st + "），开始学习");
+                console.log("【子川助手】找到课程（" + st + "），开始学习");
                 break;
               }
             }
@@ -1572,7 +1588,7 @@ function __hyInit__() {
               // 没有学习中/未学习课程，检查是否进入考试
               if (localStorage.getItem("华医mode") == "2") {
                 console.log(
-                  "【华医网小助手】无剩余可学课程，准备进入考试 (clockms)",
+                  "【子川助手】无剩余可学课程，准备进入考试 (clockms)",
                 );
                 await new Promise((resolve) => setTimeout(resolve, 2000));
                 try {
@@ -1587,7 +1603,7 @@ function __hyInit__() {
                 }
               } else {
                 console.log(
-                  "【华医网小助手】单刷模式，全部课程已完成 (clockms)",
+                  "【子川助手】单刷模式，全部课程已完成 (clockms)",
                 );
               }
             }
@@ -1604,7 +1620,7 @@ function __hyInit__() {
               document.querySelector("video").pause();
             } catch (e) {}
             sessionStorage.setItem("hua_yi_post_refresh", "1");
-            console.log("【华医网小助手】课程已完成，3秒后刷新页面检查状态");
+            console.log("【子川助手】课程已完成，3秒后刷新页面检查状态");
             await new Promise((resolve) => setTimeout(resolve, 3000));
             location.reload();
           }
@@ -1670,7 +1686,7 @@ function __hyInit__() {
             align-items: center;
             cursor: move;
         ">
-            <span>华医网小助手 v` +
+            <span>子川助手 v` +
         (typeof GM_info !== "undefined"
           ? GM_info["script"]["version"]
           : HYU_VERSION) +
@@ -1725,6 +1741,35 @@ function __hyInit__() {
         `</div>
                 <div style="font-size:11px;color:#999;margin-top:4px;">点击按钮切换模式</div>
                 <div style="font-size:11px;color:#999;margin-top:2px;">'默认1x，建议2x以内'</div>
+            </div>
+            <div id="hyu-progress-section" style="
+                font-size: 13px;
+                color: #333;
+                line-height: 1.6;
+                padding: 10px 12px;
+                background: #fafafa;
+                border-radius: 4px;
+                border: 1px solid #e8e8e8;
+                margin-bottom: 10px;
+            ">
+                <div style="font-weight:bold;margin-bottom:6px;color:#555;">课程进度</div>
+                <div id="hyu-progress-text" style="font-size:12px;color:#666;">读取中…</div>
+            </div>
+            <div id="hyu-answer-section" style="
+                font-size: 13px;
+                color: #333;
+                line-height: 1.6;
+                padding: 10px 12px;
+                background: #fafafa;
+                border-radius: 4px;
+                border: 1px solid #e8e8e8;
+                margin-bottom: 10px;
+            ">
+                <div style="font-weight:bold;margin-bottom:6px;color:#555;">答案库</div>
+                <div style="display:flex;gap:6px;">
+                    <span id="hyu-ans-export" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">导出 JSON</span>
+                    <span id="hyu-ans-import" style="display:inline-block;padding:3px 10px;border-radius:12px;font-size:12px;cursor:pointer;background:#e0e0e0;color:#555;user-select:none;">导入 JSON</span>
+                </div>
             </div>
             <div id="speedSection" style="
                 font-size: 13px;
@@ -1881,7 +1926,7 @@ function __hyInit__() {
               sec.style.background = "#f0f7ff";
               sec.style.borderColor = "#d0e4f7";
             }
-            console.log("【华医网小助手】已切换为单刷视频模式");
+            console.log("【子川助手】已切换为单刷视频模式");
           } else {
             localStorage.setItem("华医mode", "2");
             modeLabelEl.innerText = "视频+考试";
@@ -1891,7 +1936,7 @@ function __hyInit__() {
               sec.style.background = "#e8f5e9";
               sec.style.borderColor = "#a5d6a7";
             }
-            console.log("【华医网小助手】已切换为视频+考试模式");
+            console.log("【子川助手】已切换为视频+考试模式");
           }
         };
       }
@@ -1921,6 +1966,120 @@ function __hyInit__() {
             ratechg(rate);
           };
         })(speedBtns[s]);
+      }
+
+      // ====== 【v2.4.0】课程进度显示（视频页侧边栏可读时每 15 秒刷新） ======
+      var progressEl = document.getElementById("hyu-progress-text");
+      function updatePanelProgress() {
+        if (!progressEl) return;
+        var lis = document.querySelectorAll("li.lis-inside-content");
+        if (!lis.length) {
+          progressEl.textContent = "进入视频页后显示进度";
+          return;
+        }
+        var done = 0,
+          learning = 0,
+          notDone = 0,
+          examCount = 0;
+        for (var i = 0; i < lis.length; i++) {
+          var st = getCourseStatus(lis[i]);
+          if (st.indexOf("已完成") !== -1) done++;
+          else if (st.indexOf("学习中") !== -1) learning++;
+          else if (st.indexOf("未学习") !== -1) notDone++;
+          else if (st.indexOf("待考试") !== -1) examCount++;
+        }
+        var v = document.querySelector("video");
+        var avgMin = v && v.duration ? Math.round(v.duration / 60) : 0;
+        var remaining = learning + notDone + examCount;
+        var est =
+          avgMin > 0 && remaining > 0
+            ? "，约需 " + Math.round(remaining * avgMin) + " 分钟"
+            : "";
+        var curLi = getCurrentCourseLi();
+        var h2 = curLi ? curLi.querySelector("h2") : null;
+        var title = h2
+          ? h2.textContent.replace(/\s+/g, " ").trim().slice(0, 24)
+          : "";
+        progressEl.innerHTML =
+          "本包 <b>" + done + "/" + lis.length + "</b> 已完成，剩 " + remaining + " 节" + est +
+          (title ? "<br>正在学：" + title : "");
+      }
+      updatePanelProgress();
+      setInterval(updatePanelProgress, 15000);
+
+      // ====== 【v2.4.0】答案库导出/导入（跨浏览器/跨电脑迁移已记录答案） ======
+      var ansExportBtn = document.getElementById("hyu-ans-export");
+      if (ansExportBtn) {
+        ansExportBtn.onclick = function () {
+          var data = localStorage.getItem(keyAllAnswer) || "{}";
+          try {
+            if (!Object.keys(JSON.parse(data)).length) {
+              alert("答案库为空，通过考试后才会有记录");
+              return;
+            }
+          } catch (e) {}
+          var blob = new Blob([data], { type: "application/json" });
+          var a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "hua-yi-answers-" + new Date().toISOString().slice(0, 10) + ".json";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(function () {
+            URL.revokeObjectURL(a.href);
+            if (a.parentNode) a.parentNode.removeChild(a);
+          }, 5000);
+        };
+      }
+      var ansImportBtn = document.getElementById("hyu-ans-import");
+      if (ansImportBtn) {
+        ansImportBtn.onclick = function () {
+          var input = document.createElement("input");
+          input.type = "file";
+          input.accept = ".json,application/json";
+          input.style.display = "none";
+          input.onchange = function () {
+            var file = input.files && input.files[0];
+            if (!file) {
+              input.remove();
+              return;
+            }
+            var reader = new FileReader();
+            reader.onload = function () {
+              try {
+                var incoming = JSON.parse(reader.result);
+                if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+                  throw new Error("文件格式不正确（需为本脚本导出的 JSON）");
+                }
+                var curData = {};
+                try {
+                  curData = JSON.parse(localStorage.getItem(keyAllAnswer) || "{}");
+                } catch (e) {}
+                var merged = {};
+                var added = 0;
+                for (var chapter in incoming) {
+                  if (typeof incoming[chapter] !== "object") continue;
+                  merged[chapter] = {};
+                  for (var q in curData[chapter] || {}) merged[chapter][q] = curData[chapter][q];
+                  for (var qi in incoming[chapter]) {
+                    if (!(qi in merged[chapter])) added++;
+                    merged[chapter][qi] = incoming[chapter][qi];
+                  }
+                }
+                for (var c2 in curData) {
+                  if (!(c2 in merged)) merged[c2] = curData[c2];
+                }
+                localStorage.setItem(keyAllAnswer, JSON.stringify(merged));
+                alert("导入成功：新增 " + added + " 条答案（同名答案以导入文件为准，其余保留）");
+              } catch (e) {
+                alert("导入失败：" + e.message);
+              }
+              input.remove();
+            };
+            reader.readAsText(file);
+          };
+          document.body.appendChild(input);
+          input.click();
+        };
       }
     }
 
@@ -1982,7 +2141,7 @@ function __hyInit__() {
               return;
             } // 华医网已翻状态，交给原逻辑
             console.log(
-              "【华医网小助手·修复】视频播完但状态仍为[" +
+              "【子川助手·修复】视频播完但状态仍为[" +
                 state +
                 "]，强制切换下一课",
             );
@@ -2085,6 +2244,38 @@ function __hyInit__() {
         }
       } catch (e) {}
       return "";
+    }
+
+    // 【v2.4.0】全部刷完系统通知（Web Notification；浏览器未授权时静默降级为控制台日志，
+    // 授权请求由浏览器在首次触发时弹出，被拒后不再打扰）
+    var __allDoneNotified = false;
+    function notifyAllDone(where) {
+      if (__allDoneNotified) return;
+      __allDoneNotified = true;
+      console.log("【子川助手】全部课程已完成（" + where + "）");
+      try {
+        if (!("Notification" in window)) return;
+        var show = function () {
+          try {
+            var n = new Notification("子川助手：全部课程已刷完 🎉", {
+              body: "已无未学习/学习中课程（" + where + "），可以休息啦～",
+            });
+            setTimeout(function () {
+              try {
+                n.close();
+              } catch (e) {}
+            }, 10000);
+          } catch (e) {}
+        };
+        if (Notification.permission === "granted") show();
+        else if (Notification.permission !== "denied") {
+          Notification.requestPermission()
+            .then(function (p) {
+              if (p === "granted") show();
+            })
+            .catch(function () {});
+        }
+      } catch (e) {}
     }
 
     var playNextRunning = false; // 防止并发调用
@@ -2288,6 +2479,7 @@ function __hyInit__() {
 
       if (!found) {
         console.log("没有找到任何待处理按钮，可能全部已完成");
+        notifyAllDone("无待处理课程"); // 【v2.4.0】系统通知
         if (clock) {
           clearInterval(clock);
           clock = null;
@@ -2301,7 +2493,7 @@ function __hyInit__() {
 
     // 课程列表页：自动扫描并进入待学习课程
     function autoEnterCourse() {
-      console.log("【华医网小助手】自动扫描课程列表中...");
+      console.log("【子川助手】自动扫描课程列表中...");
 
       // 辅助函数：查找与状态元素关联的课程链接
       function findAssociatedLink(el) {
@@ -2380,7 +2572,7 @@ function __hyInit__() {
         var link = findAssociatedLink(statusEl);
         if (link) {
           console.log(
-            "✅ 【华医网小助手】" +
+            "✅ 【子川助手】" +
               description +
               "，开始学习：" +
               (link.textContent || link.innerText || "").trim(),
@@ -2558,7 +2750,7 @@ function __hyInit__() {
             firstLink.href.indexOf("javascript:") === -1
           ) {
             console.log(
-              "✅ 【华医网小助手】在课程学习与考试区域找到课程链接，尝试进入",
+              "✅ 【子川助手】在课程学习与考试区域找到课程链接，尝试进入",
             );
             firstLink.click();
             clicked = true;
@@ -2568,11 +2760,12 @@ function __hyInit__() {
 
       if (!clicked) {
         console.log(
-          "📋 【华医网小助手】未找到需要学习的课程。可能全部已完成，或页面结构已变更。",
+          "📋 【子川助手】未找到需要学习的课程。可能全部已完成，或页面结构已变更。",
         );
         console.log(
           "   提示：如页面有未学习课程但脚本未识别，请在Greasyfork反馈区留言。",
         );
+        notifyAllDone("课程列表无未完成课程"); // 【v2.4.0】系统通知
       }
     }
 
@@ -2694,7 +2887,7 @@ function __hyInit__() {
             qaState.widget = w;
             qaLog("检测到课堂问答弹窗，找到 " + opts.length + " 个选项");
             if (mem[q] !== undefined && mem[q] >= 0 && mem[q] < opts.length) {
-              console.log("【华医网小助手·课堂问答】记忆命中，直接选第 " + (mem[q] + 1) + " 项");
+              console.log("【子川助手·课堂问答】记忆命中，直接选第 " + (mem[q] + 1) + " 项");
               qaLog("记忆命中，直接选第 " + (mem[q] + 1) + " 项");
               qaState.triedIndex = mem[q];
               try { opts[mem[q]].el.click(); } catch (e) { qaLog("点击选项异常: " + e.message); }
@@ -2716,7 +2909,7 @@ function __hyInit__() {
             return;
           }
           console.log(
-            "【华医网小助手·课堂问答】尝试第 " +
+            "【子川助手·课堂问答】尝试第 " +
               (qaState.triedIndex + 1) +
               " 项: " +
               opts[qaState.triedIndex].text,
@@ -2734,7 +2927,7 @@ function __hyInit__() {
           mem[q] = qaState.triedIndex;
           try { localStorage.setItem(qaKey, JSON.stringify(mem)); } catch (e) {}
         } catch (e) {
-          console.log("【华医网小助手·课堂问答】异常: " + e.message);
+          console.log("【子川助手·课堂问答】异常: " + e.message);
         }
       }, 2000);
     }
@@ -2749,7 +2942,7 @@ function __hyInit__() {
     // 凭据从 localStorage(hyw_cred) 读取，不内置任何默认值；无凭据则仅解锁。
     // ═══════════════════════════════════════════════════════════════════════════
     function HY_hyssloginHelper() {
-      console.log("【华医网小助手·hysslogin登录助手】已启动");
+      console.log("【子川助手·hysslogin登录助手】已启动");
 
       // 1) 读取凭据：仅从 localStorage 读取，不内置默认值
       function getCred() {
