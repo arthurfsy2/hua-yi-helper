@@ -1,7 +1,7 @@
 ﻿// ==UserScript==
 // @name         🥇【子川助手 v2.8.5】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
 // @namespace    http://tampermonkey.net/
-// @version      2.8.8
+// @version      2.10.6
 // @description  适配华医网 2026.11 最新页面（v2.8.6 AI报错带服务端原文；v2.8.5 实测修复 Anthropic 兼容层思考块解析+max_tokens；v2.8.4 修切课清空中间库+桥状态实时显示）
 // @author       五创作者:吴喻伦比 四创作者：Arthurfsy2   三创作者：Mriio   二创作者：境界程序员   原创作者：Dr.S
 // @license      AGPL License
@@ -20,9 +20,14 @@
 // 脚本版本号（单一来源）。油猴环境优先读 GM_info；
 // 通过自动化框架（Playwright/WorkBuddy 等）注入时 GM_info 不存在，回退到此常量。
 // ⚠️ 修改时需与顶部 @version 及 @name 中的版本号保持一致。
-var HYU_VERSION = "2.8.8";
+var HYU_VERSION = "2.10.6";
 
 var newupdate =
+  "2026.11.27 v2.9.6 学分计划重构为两阶段状态机：①学习记录待修课按记住的顺序自动续学 ②目录补足差额；手动选课自动采纳为当前课不再强制切回；修「计划队列不跟随顺序变更」+「课件入口误开新标签页」\n" +
+  "2026.11.27 v2.9.5 选课窗重做：继教首页+学习记录两页进入即弹、居中、20秒倒计时无操作按默认顺序自动开始、先学可调序、选过记住不再弹、面板「课程顺序」随时↑调整+重置记忆\n" +
+  "2026.11.27 v2.9.4 官网首页公告/图片预览遮挡层自动关闭（修点菜单无反应）；学习记录页接入学分计划（选课小窗+学习记录课程优先+手动选课自动采纳）\n" +
+  "2026.11.27 v2.9.2/2.9.3 修学分计划卡在课程详情页：课件列表在 iframe 内需跨框读取；课件行新版结构=div.course[data-href]（无a链接），直接读 data-href 取 cwid 顶层导航；待考试课件纳入调度；播放页完成自动切下一门\n" +
+  "2026.11.27 v2.8.8 修 AI 422「missing field content」：v2.8.5 把 messages content 误写成未定义变量被 JSON.stringify 丢弃；补真函数回归测试防复发\n" +
   "2026.11.27 v2.8.7 DeepSeek 专例：/anthropic 地址自动规范化为 /v1（OpenAI 格式）——实测 /anthropic 兼容层对请求体校验不稳定（同一体部分环境 422 反序列化失败），/v1 处处稳定且支持关思考；同 Key 两端点通用，配置无需改\n" +
   "2026.11.27 v2.8.6 AI报错带上服务端原文（422=参数错误，响应体写明哪个字段不合法，如模型名抄错带脚注；401=Key无效 402=余额不足），不再只报状态码猜原因\n" +
   "2026.11.27 v2.8.5 实测修复 AI「响应无文本」：DeepSeek Anthropic 兼容层 content 是分块数组且第一块是思考块（[{thinking},{text}]），旧解析只读第一块→永远空。现扫全块拼 text、无 text 块退 thinking；max_tokens 1024→4096（防长题思考耗尽截断）。用真实 Key 端到端验证 /anthropic 与 /v1 两格式均正确返回；AI 请求自动加 thinking:disabled 关闭思考（选择题无需推理，实测输出 13token→1token，两格式同参数均生效）\n" +
@@ -479,6 +484,7 @@ function __hyInit__() {
     var navCooldownUntil = 0; // 跳转冷却期：此时间戳之前禁止再次跳转
     var hyuExamWaitUntil = 0; //【v2.8.2】待考试但按钮未解锁时的等待截止时间（最多30s）
     var _lastCompletedCheck = 0; // debounce：连续两次读到"已完成"才真正触发
+    var hyuExamWaitStart = 0; //【v2.10.4】考试按钮解锁等待起点（弹窗/后台延迟时不跳过）
 
     advis();
     var tixingEl = document.querySelector("[id='tixing']");
@@ -553,6 +559,27 @@ function __hyInit__() {
       });
     } else {
       console.log("其它情况");
+      // 【v2.9.4】官网首页（www.91huayi.com）公告弹窗遮挡整页点击：pcPopupOverlay
+      // （mednews 公告 iframe）+ imagePreviewOverlay（空图片预览层 z-index 9999）盖住
+      // 全页 → 点「继续教育」等任何菜单都没反应。自动隐藏这两个层（实测隐藏后跳转正常）
+      (function autoDismissHomeOverlays() {
+        var n = 0;
+        var t = setInterval(function () {
+          var hit = false;
+          ["pcPopupOverlay", "imagePreviewOverlay"].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el && el.style.display !== "none") {
+              el.style.display = "none";
+              hit = true;
+            }
+          });
+          if (hit) {
+            console.log("【子川助手】已自动关闭官网首页遮挡弹层（解除整页点击遮挡）");
+            clearInterval(t);
+          }
+          if (++n > 30) clearInterval(t);
+        }, 1000);
+      })();
       // 【2026.8.24】自动关闭课程列表页的弹窗
       (function autoClosePopups() {
         function tryClose() {
@@ -808,6 +835,8 @@ function __hyInit__() {
           }
           var qTestAnswer = {};
           var index = 0;
+          // 【v2.10.4】上次交卷的错题表：答错过的题本轮不再重复吃同一答案（AI/题库都跳过种子）
+          var qWrongLast = JSON.parse(localStorage.getItem(keyResult)) || {};
 
           // 【v2.8.0】作答优先级（按用户要求）：①题库/答案库 → ②百度搜索（开百度时）
           // → ③AI（仅百度关闭且 AI 开启时）→ ④试错。百度/AI 互斥：开了百度就不再问
@@ -823,7 +852,7 @@ function __hyInit__() {
               try {
                 tq = tables[ti]
                   .querySelector(".q_name")
-                  .innerText.substring(2)
+                  .innerText.replace(/^[0-9]+[、.，,]\s*/, "")
                   .replace(/\s*/g, "");
               } catch (e) {
                 continue;
@@ -908,7 +937,7 @@ function __hyInit__() {
             else {
               var q = question
                 .querySelector(".q_name")
-                .innerText.substring(2)
+                .innerText.replace(/^[0-9]+[、.，,]\s*/, "")
                 .replace(/\s*/g, ""); //问题的具体文本
 
               // 【v2.8.0】题干归一化查找：修复"上次答对的题这次还答错"。
@@ -940,7 +969,42 @@ function __hyInit__() {
                   index,
                   qRightAnswer[hitKey],
                 ); //返回答案选项label
-                if (rightSelection) {
+                // 【v2.10.4】上次交卷此题按该答案答错 → 从此答案字母推进下一项（打破死循环）
+                var wrongBefore = qWrongLast.hasOwnProperty(q);
+                if (rightSelection && wrongBefore) {
+                  var bankLetter = (rightSelection.innerText || "")
+                    .trim()
+                    .substring(0, 1);
+                  var nextLetter = getNextChoice(bankLetter);
+                  var nextAnswer = getChoiceCode(nextLetter);
+                  var nextLabel = document
+                    .querySelectorAll("tbody")
+                    [index].getElementsByTagName("label")[nextAnswer];
+                  if (nextLabel) {
+                    questions[q] = nextLetter;
+                    try {
+                      qTestAnswer[q] = nextLabel.innerText.substring(3);
+                    } catch (error) {}
+                    console.log(
+                      "【子川助手】题库答案上次答错，推进到 " + nextLetter + ": " + q.slice(0, 20) + "…",
+                    );
+                    nextLabel.click();
+                  } else {
+                    // 推进越界（已到最后一项）→ 回 A 重启轮转
+                    //【v2.10.6 修复】此前误点 rightSelection（还是题库的旧答案！）
+                    questions[q] = "A";
+                    var labelA = document
+                      .querySelectorAll("tbody")
+                      [index].getElementsByTagName("label")[0];
+                    try {
+                      qTestAnswer[q] = labelA.innerText.substring(3);
+                    } catch (error) {}
+                    console.log(
+                      "【子川助手】选项推进越界，回到 A: " + q.slice(0, 20) + "…",
+                    );
+                    if (labelA) labelA.click();
+                  }
+                } else if (rightSelection) {
                   rightSelection.click();
                 } else {
                   // 找不到匹配答案（可能选项文本已变化），回退到猜测模式
@@ -976,9 +1040,13 @@ function __hyInit__() {
                   element.click();
                 }
               } else {
-                if (aiAnswers.hasOwnProperty(q)) {
+                if (
+                  aiAnswers.hasOwnProperty(q) &&
+                  !qWrongLast.hasOwnProperty(q)
+                ) {
                   // 【v2.5.0】AI 联网答案作为试错的起点：答对随考试通过记入答案库；
-                  // 答错则重考时 getNextChoice 自动切下一项，试错流程无缝接手
+                  // 【v2.10.4】上次交卷答错的题不再重复吃同一 AI/搜索答案——
+                  // 否则每轮都被重置回同一错答案，试错推进被覆盖形成死循环
                   questions[q] = aiAnswers[q];
                   console.log(
                     "【子川助手·AI】" + q.slice(0, 24) + "… → 选择 " + aiAnswers[q],
@@ -2177,8 +2245,27 @@ function __hyInit__() {
             // 【v2.7.2】逐课考试：本课视频播完且考试按钮已解锁 → 立即进本课考试
             //（state=已完成 说明考试已通过，不重复进考）
             if (hyExamBtnUnlocked() && state != "已完成" && tryClickExamHere()) {
+              hyuExamWaitStart = 0;
               return;
             }
+            // 【v2.10.4】按钮锁定（如「眼睛休息一下」弹窗未关/后台未就绪）：
+            // 等待解锁而不是直接跳过——弹窗被脚本自动关闭后按钮即解锁，
+            // 下一轮检测自动进考试；60 秒仍锁定才按原逻辑跳过（下轮课程轮转后会回来重试）
+            if (!hyExamBtnUnlocked()) {
+              if (!hyuExamWaitStart) {
+                hyuExamWaitStart = Date.now();
+                console.log(
+                  "【子川助手】考试按钮暂未解锁（待考试），等待中（最长60秒）...",
+                );
+                hyToast("⏳ 考试按钮解锁中，等待自动进入考试...");
+              }
+              if (Date.now() - hyuExamWaitStart < 60000) {
+                return; // 等下一轮检测
+              }
+              console.log("【子川助手】考试按钮等待超时（60秒），暂跳本课考试");
+              hyToast("⚠️ 考试按钮60秒未解锁，暂跳本课（轮转后会回来重试）");
+            }
+            hyuExamWaitStart = 0;
             if (hasRemainingCourses()) {
               console.log(
                 "mode=2,当前课程已完成，但还有未学完课程，跳转下一课程",
@@ -2613,6 +2700,23 @@ function __hyInit__() {
                     <span id="hyu-search-test" class="hyu-btn" title="检测搜索链路：桥是否安装、百度是否能抓通、是否被风控">搜索自检</span>
                 </div>
             </div>
+            <div id="hyu-credit-section" class="hyu-sec" title="学分定向学习：3学分优先，余2补一门2学分课，余1补一门1学分课，补满即停；优先学习记录中已开始的课程">
+                <span class="hyu-sec-t">学分学习</span>
+                <span style="font-size:11px;color:#999;">3学分优先，余数补2/1学分课，达标自动停</span>
+                <div class="hyu-btnrow">
+                    <input id="hyu-credit-in" class="hyu-in" type="number" min="1" step="1" placeholder="目标学分" style="width:90px;">
+                    <span id="hyu-credit-start" class="hyu-btn" style="background:#2e7d32;color:#fff;" title="在继教首页/课程列表页点击：按规则自动选课并逐门学习">开始刷学分</span>
+                    <span id="hyu-credit-stop" class="hyu-btn" title="停止学分学习计划（当前进度保留）">停止</span>
+                </div>
+                <div id="hyu-credit-status" style="font-size:11px;color:#666;">未启动（在继教首页点「开始刷学分」）</div>
+                <details class="hyu-details" id="hyu-lr-order-details">
+                    <summary>课程顺序（学习记录优先级）</summary>
+                    <div id="hyu-lr-order-list" style="font-size:12px;color:#333;margin-top:4px;">读取中…</div>
+                    <div class="hyu-btnrow" style="margin-top:4px;">
+                        <span id="hyu-lr-order-reset" class="hyu-btn" title="清除记住的课程顺序：下次进入继教首页/学习记录会重新弹选课窗">重置顺序记忆</span>
+                    </div>
+                </details>
+            </div>
             <details class="hyu-details">
                 <summary>永久题库（导出/导入文件）</summary>
                 <div style="font-size:11px;color:#999;margin-top:4px;line-height:1.5;">
@@ -2956,6 +3060,122 @@ function __hyInit__() {
           }
           searchTestBtn.textContent = "搜索自检";
         };
+      }
+      // ════════ 【v2.9.0】学分学习面板 ════════
+      var creditStartBtn = document.getElementById("hyu-credit-start");
+      if (creditStartBtn) {
+        creditStartBtn.onclick = function () {
+          var inp = document.getElementById("hyu-credit-in");
+          var target = parseFloat(inp && inp.value);
+          if (!target || target <= 0) {
+            hyToast("❗先输入目标学分（如 25）");
+            return;
+          }
+          var cands = hyuCreditCandidates();
+          // 【v2.9.6】两阶段：①学习记录待修课（按记住的顺序）②目录补足（排除 LR 课程）。
+          // LR 学分先计入目标，目录只补差额。
+          var lrAll = hyuLrOrdered(hyuCreditLRLoad());
+          var lrSum = 0;
+          lrAll.forEach(function (r) {
+            if (lrSum < target - 0.01) lrSum += r.credit;
+          });
+          lrSum = Math.min(lrSum, target);
+          var need = Math.round((target - lrSum) * 10) / 10;
+          var lrNorms = lrAll.map(function (r) {
+            return hyuCreditTitleNorm(r.name);
+          });
+          var lrCodes = lrAll.map(function (r) {
+            return r.code;
+          });
+          var candsNoLR = cands.filter(function (c) {
+            var cn = hyuCreditTitleNorm(c.title);
+            var isLR = lrNorms.some(function (ln) {
+              return ln.indexOf(cn) !== -1 || cn.indexOf(ln) !== -1;
+            });
+            if (!isLR && c.code) {
+              isLR = lrCodes.indexOf(c.code) !== -1;
+            }
+            return !isLR;
+          });
+          var plan = {
+            active: true,
+            target: target,
+            queue: hyuCreditBuildQueue(need, candsNoLR, [], {}),
+            done: [],
+            visited: {},
+            startedAt: Date.now(),
+          };
+          if (need > 0 && !plan.queue.length && !lrAll.length) {
+            hyToast("❗选不出可用课程（候选不足）");
+            return;
+          }
+          try {
+            localStorage.removeItem("hyu_lr_play_stopped"); //【v2.10.2】重新开始时解除停止
+          } catch (e) {}
+          hyuCreditSave(plan);
+          hyuCreditRefreshStatus();
+          var msg =
+            "✓ 学分计划建立：目标 " + target + " 学分（学习记录优先修 " +
+            Math.min(lrAll.length, Math.ceil(target / 3)) + " 门相关课" +
+            (plan.queue.length ? "，目录补 " + plan.queue.length + " 门" : "") +
+            "）";
+          hyToast(msg);
+          setTimeout(function () {
+            if (lrAll.length) {
+              location.href = location.origin + "/pages/study_info_list.aspx";
+            } else if (plan.queue[0]) {
+              location.href =
+                location.origin +
+                "/pages/course.aspx?cid=" +
+                plan.queue[0].cid;
+            } else {
+              location.href = location.origin + "/cme/index";
+            }
+          }, 1200);
+        };
+      }
+      var creditStopBtn = document.getElementById("hyu-credit-stop");
+      if (creditStopBtn) {
+        creditStopBtn.onclick = function () {
+          var p = hyuCreditLoad();
+          if (!p || !p.active) {
+            hyToast("当前没有进行中的学分计划");
+            return;
+          }
+          p.active = false;
+          try {
+            localStorage.setItem("hyu_lr_play_stopped", "1"); //【v2.10.2】同时停掉顺序播放模式
+          } catch (e) {}
+          hyuCreditSave(p);
+          hyuCreditRefreshStatus();
+          hyToast(
+            "已停止学分计划（已完成 " + p.done.length + " 门/" +
+              hyuCreditCreditsDone(p) + " 学分）",
+          );
+        };
+      }
+      hyuCreditRefreshStatus();
+      // ════════ 【v2.9.5】课程顺序编辑器（学习记录优先级，随时可改） ════════
+      var orderListEl = document.getElementById("hyu-lr-order-list");
+      var orderDetailsEl = document.getElementById("hyu-lr-order-details");
+      if (orderListEl && orderDetailsEl) {
+        orderDetailsEl.addEventListener("toggle", function () {
+          if (orderDetailsEl.open) hyuCreditRenderOrderList();
+        });
+        var orderResetBtn = document.getElementById("hyu-lr-order-reset");
+        if (orderResetBtn) {
+          orderResetBtn.onclick = function () {
+            hyuLROrderSave([]);
+            try {
+              sessionStorage.removeItem("hyu_lr_dismiss");
+            } catch (e) {}
+            hyuCreditRenderOrderList();
+            hyToast(
+              "已重置课程顺序记忆：下次进入继教首页/学习记录会重新弹选课窗",
+            );
+          };
+        }
+        hyuCreditRenderOrderList();
       }
       // ════ 【v2.7.2】AI 模型预设（浏览器实测可直连的三家）══════
       // 2026.11.27 实测：智谱 open.bigmodel.cn（anthropic/openai 两格式）均被浏览器
@@ -3553,6 +3773,981 @@ function __hyInit__() {
       return "";
     }
 
+    // ════════ 【v2.9.0】学分定向学习 ════════
+    // 用户规则：输入目标学分（如25）→ 优先「学习记录」中已开始未完成的课程 → 其余从
+    // 课程目录选 3 学分课程 → 剩余 2 学分补一门 2 学分课、剩 1 补一门 1 学分课、
+    // 补满（0）即停。计划存 localStorage 跨页面存活，hyuCreditTick 每5秒推进：
+    // 不在当前课程页就导航过去；课程页侧边栏全部「已完成」即计入并切下一门；
+    // 到达时就已完成的课程不计学分、自动换替补。
+    var hyuCreditKey = "hyu_credit_plan";
+    var hyuCreditPriorityKey = "hyu_credit_priority";
+    function hyuCreditLoad() {
+      try {
+        return JSON.parse(localStorage.getItem(hyuCreditKey)) || null;
+      } catch (e) {
+        return null;
+      }
+    }
+    function hyuCreditSave(p) {
+      try {
+        if (p) localStorage.setItem(hyuCreditKey, JSON.stringify(p));
+        else localStorage.removeItem(hyuCreditKey);
+      } catch (e) {}
+    }
+    function hyuCreditPriorityLoad() {
+      try {
+        return JSON.parse(localStorage.getItem(hyuCreditPriorityKey)) || [];
+      } catch (e) {
+        return [];
+      }
+    }
+    // 从当前页面 DOM 收集课程候选：a[href*=course.aspx?cid=] + 容器内「X.X学分」文本
+    // 【v2.9.4】附带解析「项目编号」（2026-XX-XX-XXX(国)），用于与学习记录行精确匹配
+    function hyuCreditCandidates() {
+      var out = [];
+      var seen = {};
+      var links = document.querySelectorAll('a[href*="course.aspx?cid="]');
+      for (var i = 0; i < links.length; i++) {
+        var href = links[i].getAttribute("href") || "";
+        var m = href.match(/course\.aspx\?cid=([A-Za-z0-9-]+)/i);
+        if (!m || seen[m[1].toLowerCase()]) continue;
+        var credit = 0;
+        var title = (links[i].innerText || "").trim();
+        var code = null;
+        var node = links[i];
+        for (var up = 0; up < 6 && node; up++) {
+          var txt = node.innerText || "";
+          var cm = txt.match(/(\d+(?:\.\d+)?)\s*学分/);
+          if (cm) {
+            credit = parseFloat(cm[1]);
+            var cd = txt.match(/(\d{4}-\d{2}-\d{2}-\d+)(?=[（(]|$|\s)/);
+            if (cd) code = cd[1];
+            if (!title) {
+              var ln = txt.split("\n").filter(function (s) {
+                return s.trim().length > 4;
+              });
+              title = (ln[0] || "").trim();
+            }
+            break;
+          }
+          node = node.parentElement;
+        }
+        if (credit > 0) {
+          seen[m[1].toLowerCase()] = 1;
+          out.push({ cid: m[1], credit: credit, title: (title || m[1]).slice(0, 40), code: code });
+        }
+      }
+      return out;
+    }
+    // 按用户规则构建队列：3学分优先取整，余数精确补 2/1 学分。
+    // 【v2.9.0 增强】余数课在当前目录找不到时，自动降 3 学分数量改用小学分课组合
+    // 精确凑满（如 25 = 7×3 + 2×2）；实在凑不满才略超（保证 ≥ 目标，学分要求是下限）。
+    // priorityCids（学习记录已开始的课）排最前，其学分先计入。
+    function hyuCreditBuildQueue(target, candidates, priorityCids, excludeMap) {
+      var ex = excludeMap || {};
+      var queue = [];
+      var used = {};
+      var byCreditDesc = candidates.slice().sort(function (a, b) {
+        return b.credit - a.credit;
+      });
+      function mark(c) {
+        used[c.cid.toLowerCase()] = 1;
+        queue.push(c);
+      }
+      // 小学分课（<3）中找子集恰好凑满 need（最多5门，池小递归安全）
+      function subsetFill(smalls, need, maxN) {
+        var res = [];
+        function walk(i, left, acc) {
+          if (Math.abs(left) < 0.01 && acc.length) {
+            res = acc.slice();
+            return true;
+          }
+          if (i >= smalls.length || acc.length >= maxN || left < -0.01)
+            return false;
+          acc.push(smalls[i]);
+          if (walk(i + 1, Math.round((left - smalls[i].credit) * 10) / 10, acc))
+            return true;
+          acc.pop();
+          return walk(i + 1, left, acc);
+        }
+        walk(0, need, []);
+        return res;
+      }
+      // ① 学习记录优先候选：学分大的先计入，直到达到目标
+      var pr = [];
+      for (var pi = 0; pi < priorityCids.length; pi++) {
+        var key = String(priorityCids[pi]).toLowerCase();
+        for (var ci = 0; ci < candidates.length; ci++) {
+          if (candidates[ci].cid.toLowerCase() === key && !used[key]) {
+            pr.push(candidates[ci]);
+            break;
+          }
+        }
+      }
+      pr.sort(function (a, b) {
+        return b.credit - a.credit;
+      });
+      var sum = 0;
+      for (var qi = 0; qi < pr.length && sum < target - 0.01; qi++) {
+        mark(pr[qi]);
+        sum += pr[qi].credit;
+      }
+      var remain = Math.round((target - sum) * 10) / 10;
+      if (remain <= 0) return queue;
+      // ② 候选池：3学分档 与 小学分档
+      var threes = byCreditDesc.filter(function (c) {
+        return (
+          c.credit >= 3 && !used[c.cid.toLowerCase()] && !ex[c.cid.toLowerCase()]
+        );
+      });
+      var smalls = byCreditDesc.filter(function (c) {
+        return (
+          c.credit < 3 && !used[c.cid.toLowerCase()] && !ex[c.cid.toLowerCase()]
+        );
+      });
+      // ③ 精确组合：n3 从最多往下试，余数用小学分课子集凑满
+      var best = null;
+      var n3max = Math.min(threes.length, Math.floor(remain / 3));
+      for (var n3 = n3max; n3 >= 0 && !best; n3--) {
+        var left = Math.round((remain - n3 * 3) * 10) / 10;
+        if (left < -0.01) continue;
+        if (Math.abs(left) < 0.01) {
+          best = { n3: n3, fill: [] };
+        } else {
+          var subset = subsetFill(smalls, left, 5);
+          if (subset.length) best = { n3: n3, fill: subset };
+        }
+      }
+      if (!best) {
+        // 精确凑不满：3学分尽量多 + 小学分课选 ≥ 余数中最小的（略超保证达标）
+        var n3use = n3max;
+        var left2 = Math.round((remain - n3use * 3) * 10) / 10;
+        var cand = null;
+        if (left2 > 0) {
+          var overs = smalls
+            .filter(function (c) {
+              return c.credit >= left2 - 0.01;
+            })
+            .sort(function (a, b) {
+              return a.credit - b.credit;
+            });
+          cand = overs[0] || smalls[0] || null;
+        }
+        best = { n3: n3use, fill: cand ? [cand] : [] };
+      }
+      for (var ti = 0; ti < best.n3 && ti < threes.length; ti++) {
+        mark(threes[ti]);
+      }
+      best.fill.forEach(mark);
+      return queue;
+    }
+    function hyuCreditCreditsDone(p) {
+      var s = 0;
+      for (var i = 0; i < p.done.length; i++) s += p.done[i].credit;
+      return Math.round(s * 10) / 10;
+    }
+    function hyuCreditStatusText(p) {
+      if (!p || !p.active)
+        return p && p.done.length
+          ? "已停止（已完成 " + p.done.length + " 门 / " + hyuCreditCreditsDone(p) + " 学分）"
+          : "未启动（在继教首页点「开始刷学分」）";
+      var cur = p.queue[0];
+      var tag = p.lrOnly ? "【顺序播放】" : "目标 " + p.target + " 学分：";
+      return (
+        tag + "已修 " + p.done.length + " 门/" +
+        hyuCreditCreditsDone(p) + " 学分" +
+        (cur ? "，当前：" + cur.title + "（" + cur.credit + "学分）" : "，队列空") +
+        "，排队 " + p.queue.length + " 门"
+      );
+    }
+    function hyuCreditRefreshStatus() {
+      try {
+        var el = document.getElementById("hyu-credit-status");
+        if (el) el.textContent = hyuCreditStatusText(hyuCreditLoad());
+      } catch (e) {}
+    }
+    // 控制器：每5秒推进计划
+    // ════════ 【v2.9.4】学习记录页（/pages/study_info_list.aspx）接入 ════════
+    // 页面表格列：项目名称 | 项目编号 | 学分类型(含 X.X学分) | 操作(继续学习)。
+    // 用户规则：学分计划开启 → 按学习记录先学（表格顺序=用户选择顺序）→ 再选其他课 →
+    // 学分修够；未开启 → 尊重手动选择，此页只提供「选课小窗」辅助跳转，不强制切课。
+    function hyuCreditLRParse() {
+      var rows = [];
+      var trs = document.querySelectorAll("table tr");
+      for (var i = 0; i < trs.length; i++) {
+        var tds = trs[i].querySelectorAll("td");
+        if (tds.length < 3) continue;
+        var name = (tds[0].innerText || "").trim();
+        var codeM = (tds[1].innerText || "").match(/(\d{4}-\d{2}-\d{2}-\d+)/);
+        var cm = (tds[2].innerText || "").match(/(\d+(?:\.\d+)?)\s*学分/);
+        if (!name || !cm) continue;
+        var act = tds[tds.length - 1];
+        var clickEl =
+          act.querySelector("a, button, input[type=button]") || act;
+        //【v2.10.1】cid 在继续学习元素的 onclick 属性里（正则必须转义 \? 和 \.）
+        var cidSrc =
+          (clickEl && clickEl.getAttribute("onclick")) ||
+          act.innerHTML ||
+          "";
+        var cidM = cidSrc.match(/course\.aspx\?cid=([A-Za-z0-9-]+)/i);
+        rows.push({
+          name: name,
+          code: codeM ? codeM[1] : null,
+          credit: parseFloat(cm[1]),
+          cid: cidM ? cidM[1] : null,
+          clickEl: clickEl,
+        });
+      }
+      return rows;
+    }
+    function hyuCreditLRLoad() {
+      try {
+        return JSON.parse(localStorage.getItem("hyu_credit_lr")) || [];
+      } catch (e) {
+        return [];
+      }
+    }
+    function hyuCreditLRSave(rows) {
+      try {
+        localStorage.setItem(
+          "hyu_credit_lr",
+          JSON.stringify(
+            rows.map(function (r) {
+              return { name: r.name, credit: r.credit, code: r.code || null, cid: r.cid || null };
+            }),
+          ),
+        );
+      } catch (e) {}
+    }
+    // 学习记录课程 → 目录候选的优先 cid 列表（编号精确匹配，名称兜底；
+    // 【v2.9.5】顺序按 hyu_lr_order 用户记忆排序）
+    function hyuCreditLRPriorityCids(cands) {
+      var lr = hyuCreditLRLoad().map(function (r) {
+        return { name: r.name, credit: r.credit, code: r.code };
+      });
+      var ordered = hyuLrOrdered(lr);
+      var out = [];
+      ordered.forEach(function (r) {
+        cands.forEach(function (c) {
+          var hit =
+            (r.code && c.code && c.code === r.code) ||
+            (!r.code &&
+              c.title &&
+              (c.title.indexOf(r.name) !== -1 ||
+                r.name.indexOf(c.title) !== -1));
+          if (hit && out.indexOf(c.cid) === -1) out.push(c.cid);
+        });
+      });
+      return out;
+    }
+    // 选课顺序窗（v2.9.5 重做）：继教首页/项目筛选 + 学习记录 两个画面进入即弹（居中），
+    // 点「先学」把该课调到第一位，20 秒无操作按当前顺序自动开始；任何点击重置倒计时。
+    // 选过顺序后记住（hyu_lr_order，按项目编号），下次不再弹；面板「课程顺序」可随时改。
+    function hyuLROrderLoad() {
+      try {
+        return JSON.parse(localStorage.getItem("hyu_lr_order")) || [];
+      } catch (e) {
+        return [];
+      }
+    }
+    function hyuLROrderSave(codes) {
+      try {
+        localStorage.setItem("hyu_lr_order", JSON.stringify(codes));
+      } catch (e) {}
+    }
+    // 供 UI/计划的课程行：学习记录页实时解析，其他页用存储值
+    function hyuLrRowsForUi() {
+      if (/study_info_list/i.test(location.pathname)) {
+        var rows = hyuCreditLRParse();
+        if (rows.length) {
+          hyuCreditLRSave(rows);
+          return rows;
+        }
+      }
+      return hyuCreditLRLoad().map(function (r) {
+        return { name: r.name, credit: r.credit, code: r.code, cid: r.cid, clickEl: null };
+      });
+    }
+    function hyuLrOrdered(rows) {
+      var order = hyuLROrderLoad();
+      if (!order.length) return rows;
+      var out = [];
+      order.forEach(function (code) {
+        rows.forEach(function (r) {
+          if (r.code === code && out.indexOf(r) === -1) out.push(r);
+        });
+      });
+      rows.forEach(function (r) {
+        if (out.indexOf(r) === -1) out.push(r);
+      });
+      return out;
+    }
+    function hyuLrProceed(rows, ordered) {
+      hyuLROrderSave(
+        ordered.map(function (r) {
+          return r.code;
+        }),
+      );
+
+      var w = document.getElementById("hyu-lr-order-win");
+      if (w) w.remove();
+      var first = ordered[0];
+      if (!first) return;
+      if (first.cid) {
+        //【v2.9.9】同页导航（站点继续学习=window.open 会开新标签页）
+        location.href = location.origin + '/pages/course.aspx?cid=' + first.cid;
+      } else if (first.clickEl) {
+        first.clickEl.click(); // 学习记录页：点该行「继续学习」（旧结构兜底）
+      } else {
+        // 目录页：按项目编号匹配目录候选拿 cid
+        var cands = hyuCreditCandidates();
+        var hit = null;
+        cands.forEach(function (c) {
+          if (!hit && first.code && c.code === first.code) hit = c;
+        });
+        if (hit) {
+          location.href =
+            location.origin + "/pages/course.aspx?cid=" + hit.cid;
+        } else {
+          location.href = location.origin + "/pages/cme.aspx"; // 我的继教目录里继续匹配
+        }
+      }
+    }
+    function hyuLrOrderWindow(rows, mode) {
+      if (document.getElementById("hyu-lr-order-win")) return;
+      try {
+        if (window.__hyuLrDismissed === true) return; //【v2.10.3】暂不学习只抑制当前页面，下次进入仍弹
+      } catch (e) {}
+      if (!rows.length) return;
+      var ordered = hyuLrOrdered(rows);
+      var left = 20;
+      var w = document.createElement("div");
+      w.id = "hyu-lr-order-win";
+      w.style.cssText =
+        "position:fixed;left:50%;top:44%;transform:translate(-50%,-50%);z-index:2147483647;" +
+        "background:#fff;border:2px solid #1565c0;border-radius:12px;padding:16px 20px;" +
+        "font:13px/1.8 'Microsoft YaHei',sans-serif;box-shadow:0 8px 32px rgba(0,0,0,.3);width:480px;max-width:92vw;";
+      function render() {
+        var rowsHtml = "";
+        ordered.forEach(function (r, i) {
+          rowsHtml +=
+            '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px dashed #e0e0e0;">' +
+            '<span style="color:#1565c0;font-weight:bold;width:18px;">' + (i + 1) + ".</span>" +
+            '<span style="flex:1;color:#333;">' + r.name.slice(0, 30) + "（" + r.credit + "学分）</span>" +
+            (i > 0
+              ? '<span class="hyu-lr-first" data-i="' + i + '" style="background:#2e7d32;color:#fff;padding:1px 10px;border-radius:8px;cursor:pointer;white-space:nowrap;">先学</span>'
+              : '<span style="color:#2e7d32;font-weight:bold;white-space:nowrap;">← 先学</span>') +
+            "</div>";
+        });
+        w.innerHTML =
+          '<div style="font-weight:bold;font-size:14px;color:#1565c0;margin-bottom:4px;">📚 选择先学哪门课</div>' +
+          '<div style="color:#666;margin-bottom:8px;">点「先学」把该课调到第一位；<b id="hyu-lr-cd" style="color:#e65100;">' + left + "</b> 秒无操作将按当前顺序自动开始学习</div>" +
+          rowsHtml +
+          '<div style="margin-top:10px;display:flex;gap:10px;align-items:center;">' +
+          '<span id="hyu-lr-go" style="background:#1976d2;color:#fff;padding:4px 14px;border-radius:8px;cursor:pointer;">按当前顺序开始 ▶</span>' +
+          '<span id="hyu-lr-dismiss" style="color:#999;cursor:pointer;text-decoration:underline;">暂不学习</span>' +
+          "</div>";
+      }
+      render();
+      document.body.appendChild(w);
+      var cdTimer = null;
+      function startCd() {
+        if (cdTimer) clearInterval(cdTimer);
+        cdTimer = setInterval(function () {
+          left--;
+          var el = document.getElementById("hyu-lr-cd");
+          if (el) el.textContent = left;
+          if (left <= 0) {
+            clearInterval(cdTimer);
+            hyuLrProceed(rows, ordered); // 20 秒无操作：按当前顺序自动开始
+          }
+        }, 1000);
+      }
+      render();
+      startCd();
+      w.addEventListener("click", function (e) {
+        var t = e.target;
+        if (!t.classList) return;
+        if (t.classList.contains("hyu-lr-first")) {
+          var i = parseInt(t.getAttribute("data-i"), 10);
+          var moved = ordered.splice(i, 1)[0];
+          ordered.unshift(moved);
+          left = 20; // 操作重置倒计时
+          render();
+          startCd();
+        } else if (t.id === "hyu-lr-go") {
+          if (cdTimer) clearInterval(cdTimer);
+          hyuLrProceed(rows, ordered);
+        } else if (t.id === "hyu-lr-dismiss") {
+          if (cdTimer) clearInterval(cdTimer);
+          window.__hyuLrDismissed = true; //【v2.10.3】仅抑制当前页面
+          w.remove();
+        }
+      });
+    }
+    // 【v2.9.6】标题归一化（去空白，用于课程名匹配）
+    function hyuCreditTitleNorm(s) {
+      return String(s || "").replace(/\s+/g, "");
+    }
+    // 学习记录里还没修的课（按记住的顺序；已计学分的课跳过）
+    function hyuCreditLRPending(p) {
+      var doneT = p.done.map(function (d) {
+        return hyuCreditTitleNorm(d.title);
+      });
+      return hyuLrOrdered(hyuCreditLRLoad()).filter(function (r) {
+        var n = hyuCreditTitleNorm(r.name);
+        return !doneT.some(function (t) {
+          return t.indexOf(n) !== -1 || n.indexOf(t) !== -1;
+        });
+      });
+    }
+    // 统一调度下一步：达标结束 → LR 待修去学习记录页 → 队列头课程页 → 目录补
+    function hyuCreditGotoNext(p) {
+      var got = hyuCreditCreditsDone(p);
+      if (p.lrOnly) {
+        // 顺序播放模式：LR 全部修完 → 结束
+        var pend = hyuCreditLRPending(p);
+        if (pend.length) {
+          p.navLock = Date.now() + 8000;
+          hyuCreditSave(p);
+          location.href = location.origin + "/pages/study_info_list.aspx";
+          return;
+        }
+        p.active = false;
+        p.lrPlayDone = true;
+        hyuCreditSave(p);
+        hyuCreditRefreshStatus();
+        hyToast("🎉 顺序播放完成：学习记录课程已全部学完");
+        return;
+      }
+      if (got >= p.target - 0.01) {
+        p.active = false;
+        p.current = null;
+        hyuCreditSave(p);
+        hyuCreditRefreshStatus();
+        hyToast("🎉 学分目标达成：已修 " + p.done.length + " 门 / " + got + " 学分");
+        console.log("【子川助手·学分】目标达成：" + got + "/" + p.target);
+        return;
+      }
+      if (hyuCreditLRPending(p).length) {
+        p.navLock = Date.now() + 8000;
+        hyuCreditSave(p);
+        location.href = location.origin + "/pages/study_info_list.aspx";
+        return;
+      }
+      if (p.queue[0]) {
+        p.navLock = Date.now() + 8000;
+        hyuCreditSave(p);
+        location.href =
+          location.origin + "/pages/course.aspx?cid=" + p.queue[0].cid;
+        return;
+      }
+      p.navLock = Date.now() + 8000;
+      hyuCreditSave(p);
+      location.href = location.origin + "/cme/index";
+    }
+    // 学习记录页：计划活跃且已选顺序 → 按记住的顺序自动点第一门「待修课」的「继续学习」
+    // 【v2.10.4】多标签单飞锁：30 秒内只允许一个标签调度 LR（防多标签重复开课/并发播放）
+    function hyuCreditLRAutoContinue(p, lrPending) {
+      var lr = hyuCreditLRParse();
+      if (!lr.length) return;
+      var lastNav = 0;
+      try {
+        lastNav = parseInt(localStorage.getItem("hyu_lr_nav_ts") || "0", 10);
+      } catch (e) {}
+      if (lastNav && Date.now() - lastNav < 30000) {
+        hyuCreditDbg("LRAutoContinue:另一标签 " + Math.round((Date.now() - lastNav) / 1000) + " 秒前已调度，本标签跳过");
+        return;
+      }
+      try {
+        localStorage.setItem("hyu_lr_nav_ts", String(Date.now()));
+      } catch (e) {}
+      var ordered = hyuLrOrdered(lr);
+      for (var i = 0; i < ordered.length; i++) {
+        var r = ordered[i];
+        var isPending = lrPending.some(function (lp) {
+          if (lp.code && r.code) return lp.code === r.code;
+          var a = hyuCreditTitleNorm(r.name);
+          var b = hyuCreditTitleNorm(lp.name);
+          return a.indexOf(b) !== -1 || b.indexOf(a) !== -1;
+        });
+        if (isPending && (r.cid || r.clickEl)) {
+          hyuCreditDbg("LRAutoContinue:命中 r.cid=" + (r.cid || "null").slice(0, 10));
+          p.navLock = Date.now() + 10000;
+          hyuCreditSave(p);
+          console.log(
+            "【子川助手·学分】学习记录优先：进入「" + r.name + "」",
+          );
+          //【v2.9.9】同页导航（站点的继续学习是 window.open 会开新标签页导致标签爆炸）
+          if (r.cid) {
+            location.href =
+              location.origin + "/pages/course.aspx?cid=" + r.cid;
+          } else {
+            r.clickEl.click();
+          }
+          return;
+        }
+      }
+    }
+
+    // 【调试信标】仅本地 8964 模拟站可达时生效，生产环境静默失败
+    function hyuCreditDbg(m) {
+      try {
+        fetch("http://127.0.0.1:8964/beacon?m=" + encodeURIComponent(String(m).slice(0, 150)));
+      } catch (e) {}
+    }
+    // 【v2.9.2】课程详情页的课件列表在 iframe 内（2026.11 实测顶层文档 lis=0），
+    // 所有课件状态读取必须跨同源 iframe 收集
+    function hyuCreditLisAll() {
+      var out = [];
+      var docs = [document];
+      try {
+        var fs = document.querySelectorAll("iframe");
+        for (var i = 0; i < fs.length; i++) {
+          try {
+            var d = fs[i].contentDocument;
+            if (d) docs.push(d);
+          } catch (e) {}
+        }
+      } catch (e) {}
+      for (var j = 0; j < docs.length; j++) {
+        try {
+          var lis = docs[j].querySelectorAll("li.lis-inside-content");
+          for (var k = 0; k < lis.length; k++) out.push(lis[k]);
+        } catch (e) {}
+      }
+      return out;
+    }
+    // 【v2.9.3 实测重写】2026.11 课程详情页课件行结构 = div.course[data-href=course_ware?cwid]
+    // + button 状态文本（无 <a> 链接，站点靠 goCourseWare(this) 读 data-href 导航）。
+    // 旧版 li.lis-inside-content+a[href] 结构仅保留兜底。
+    function hyuCreditAllDone() {
+      var rows = document.querySelectorAll('[data-href*="course_ware"]');
+      if (rows.length) {
+        for (var i = 0; i < rows.length; i++) {
+          var b = rows[i].querySelector("button");
+          if ((b ? b.innerText.trim() : "") !== "已完成") return false;
+        }
+        return true;
+      }
+      var lis = hyuCreditLisAll();
+      if (!lis.length) return false;
+      for (var j = 0; j < lis.length; j++) {
+        var b2 = lis[j].querySelector("button");
+        if ((b2 ? b2.innerText.trim() : "") !== "已完成") return false;
+      }
+      return true;
+    }
+    // 找第一个未完成课件（待考试/学习中/未学习都算——待考试=要进考试才算完成），
+    // 返回 cwid，顶层直接导航（course_ware.aspx 会 302 到 polyv）。
+    // 【v2.10.3】课件行在 iframe 内（与课件列表同），需跨同源 iframe 收集
+    function hyuCreditDeepRows() {
+      var out = [];
+      var roots = [document];
+      try {
+        var fs = document.querySelectorAll("iframe");
+        for (var i = 0; i < fs.length; i++) {
+          try {
+            var d = fs[i].contentDocument;
+            if (d) roots.push(d);
+          } catch (e) {}
+        }
+      } catch (e) {}
+      for (var j = 0; j < roots.length; j++) {
+        try {
+          var rr = roots[j].querySelectorAll('[data-href*="course_ware"]');
+          for (var k = 0; k < rr.length; k++) out.push(rr[k]);
+        } catch (e) {}
+      }
+      return out;
+    }
+    function hyuCreditFirstUnfinished() {
+      var rows = hyuCreditDeepRows();
+      for (var i = 0; i < rows.length; i++) {
+        var b = rows[i].querySelector("button");
+        var st = b ? b.innerText.trim() : "";
+        var m = (rows[i].getAttribute("data-href") || "").match(
+          /cwid=([A-Za-z0-9-]+)/i,
+        );
+        if (st !== "已完成" && m) {
+          return { cwid: m[1], status: st };
+        }
+      }
+      var lis = hyuCreditLisAll();
+      for (var j = 0; j < lis.length; j++) {
+        var b2 = lis[j].querySelector("button");
+        var st2 = b2 ? b2.innerText.trim() : "";
+        var a = lis[j].querySelector('a[href*="course_ware"]');
+        if (!a) continue;
+        var m2 = (a.getAttribute("href") || "").match(/cwid=([A-Za-z0-9-]+)/i);
+        if ((st2 === "未学习" || st2 === "学习中") && m2) {
+          return { cwid: m2[1], status: st2 };
+        }
+      }
+      return null;
+    }
+    // 【v2.9.5】面板「课程顺序」列表渲染（↑ 把该课设为先学，即时保存）
+    function hyuCreditRenderOrderList() {
+      try {
+        var el = document.getElementById("hyu-lr-order-list");
+        if (!el) return;
+        var ordered = hyuLrOrdered(hyuCreditLRLoad());
+        if (!ordered.length) {
+          el.innerHTML =
+            '<span style="color:#999;">尚未识别到学习记录课程——先去「学习记录」页打开一次</span>';
+          return;
+        }
+        var html = "";
+        ordered.forEach(function (r, i) {
+          html +=
+            '<div style="display:flex;align-items:center;gap:4px;margin:2px 0;">' +
+            '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#333;">' +
+            (i + 1) + ". " + r.name.slice(0, 22) + "（" + r.credit + "学分）</span>" +
+            (i === 0
+              ? '<span style="color:#2e7d32;padding:0 6px;font-weight:bold;">先学</span>'
+              : '<span style="color:#999;padding:0 6px;">第' + (i + 1) + '门</span>') +
+            "</div>";
+        });
+        el.innerHTML = html;
+      } catch (e) {}
+    }
+    function hyuCreditTick() {
+      hyuCreditRefreshStatus();
+      // 【v2.9.5】选课顺序窗：继教首页/项目筛选 + 学习记录 两个画面进入即弹
+      //（未选过顺序时才弹，选过记住；「暂不学习」本会话不再弹），与是否开计划无关
+      var onLrPage = /study_info_list/i.test(location.pathname);
+      var onCatalogPage =
+        /\/cme\/index/i.test(location.pathname) ||
+        /pages\/cme\.aspx/i.test(location.pathname);
+      if (
+        (onLrPage || onCatalogPage) &&
+        !document.getElementById("hyu-lr-order-win") &&
+        hyuLROrderLoad().length === 0
+      ) {
+        var dismissed = false;
+        dismissed = window.__hyuLrDismissed === true; //【v2.10.3】页面级
+        if (!dismissed) {
+          var rowsUi = hyuLrRowsForUi();
+          if (rowsUi.length) hyuLrOrderWindow(rowsUi, onLrPage ? "lr" : "cat");
+        }
+      }
+      // 选课窗显示中：暂停学分调度（把 20 秒留给用户选择）
+      if (document.getElementById("hyu-lr-order-win")) return;
+      var p = hyuCreditLoad();
+      // 【v2.10.2】顺序播放模式：选过顺序且未停止时——无论计划是否开启，
+      // 都按记住的顺序自动播放学习记录课程（学完为止，不补目录、不计学分目标）
+      var lrStopFlag = false;
+      try {
+        lrStopFlag = localStorage.getItem("hyu_lr_play_stopped") === "1";
+      } catch (e) {}
+      var sessionDismiss = false;
+      try {
+        sessionDismiss = sessionStorage.getItem("hyu_lr_dismiss") === "1";
+      } catch (e) {}
+      var orderCodes = hyuLROrderLoad();
+      if (
+        (!p || !p.active) &&
+        !(p && p.stopped) &&
+        orderCodes.length &&
+        !lrStopFlag &&
+        !sessionDismiss
+      ) {
+        var lrRowsAll = hyuCreditLRLoad();
+        var orderedAll = hyuLrOrdered(lrRowsAll);
+        var doneT0 = p && p.done
+          ? p.done.map(function (d) {
+              return hyuCreditTitleNorm(d.title);
+            })
+          : [];
+        var pending0 = orderedAll.filter(function (r) {
+          var n = hyuCreditTitleNorm(r.name);
+          return !doneT0.some(function (t) {
+            return t.indexOf(n) !== -1 || n.indexOf(t) !== -1;
+          });
+        });
+        if (pending0.length) {
+          var lrTotal = 0;
+          orderedAll.forEach(function (r) {
+            lrTotal += r.credit;
+          });
+          lrTotal = Math.round(lrTotal * 10) / 10;
+          p = {
+            active: true,
+            lrOnly: true,
+            target: lrTotal,
+            queue: [],
+            done: p && p.done ? p.done : [],
+            visited: p && p.visited ? p.visited : {},
+            current: p && p.current ? p.current : null,
+            startedAt: Date.now(),
+          };
+          console.log(
+            "【子川助手·学分】顺序播放模式：学习记录课程 " +
+              pending0.length +
+              " 门待修",
+          );
+        }
+      }
+      if (!p || !p.active) return;
+      if (Date.now() < (p.navLock || 0)) return;
+      var path = location.pathname;
+      var lrPending = hyuCreditLRPending(p); // 学习记录里还没修的课（按记住的顺序）
+      var cur = p.current; // 当前学习中的课（进入课程详情页时采纳设置）
+      var gotCred = hyuCreditCreditsDone(p);
+      // ⓪【v2.10.4】polyv 并发违规自动关标签：本账号多标签同时播放会触发平台违规检测。
+      // 检测到提示 → 本标签若是脚本打开的（window.open 产物）可自关；手动打开的请手动关。
+      if (/course_ware_(polyv|cc)\.aspx/i.test(path)) {
+        try {
+          var bodyText = document.body.innerText || "";
+          if (
+            bodyText.indexOf("已有视频在播放") !== -1 ||
+            bodyText.indexOf("同一视频") !== -1 ||
+            bodyText.indexOf("请关闭已播放") !== -1
+          ) {
+            if (!window.__hyuCloseTried) {
+              window.__hyuCloseTried = true;
+              hyToast("⚠️ 检测到多标签并发播放，3 秒后自动关闭本标签");
+              setTimeout(function () {
+                window.close();
+                setTimeout(function () {
+                  hyToast("❗本标签无法自动关闭，请手动关闭此播放标签");
+                }, 600);
+              }, 3000);
+            }
+          }
+        } catch (e) {}
+      }
+      // ① 播放页：不打扰；当前课全部课件已完成 → 计学分 → 调度下一步
+      if (/course_ware_(polyv|cc)\.aspx/i.test(path)) {
+        if (!cur) return; // 手动打开的播放页，不打扰
+        var lisP = hyuCreditLisAll();
+        if (!lisP.length) return; // 侧边栏未就绪
+        if (!hyuCreditAllDone()) return; // 还在学，不打扰
+        p.done.push({ cid: cur.cid, credit: cur.credit, title: cur.title });
+        p.current = null;
+        p.navLock = Date.now() + 8000;
+        hyuCreditSave(p);
+        hyToast(
+          "📚 学分课完成：" + cur.title + "（" + cur.credit + "学分），累计 " +
+            hyuCreditCreditsDone(p) + "/" + p.target,
+        );
+        hyuCreditGotoNext(p);
+        return;
+      }
+      if (/exam(_result)?\.aspx/i.test(path)) return; // 考试中不打扰
+      // ② 学习记录页：有待修课且无当前课 → 按顺序自动点第一门「继续学习」；学完回调度
+      if (onLrPage) {
+        if (lrPending.length && !p.current) {
+          hyuCreditLRAutoContinue(p, lrPending);
+          return;
+        }
+        if (p.current) {
+          // 学到一半回到了学习记录页：回当前课程页继续
+          p.navLock = Date.now() + 8000;
+          hyuCreditSave(p);
+          location.href =
+            location.origin + "/pages/course.aspx?cid=" + p.current.cid;
+          return;
+        }
+        hyuCreditGotoNext(p); // LR 修完/无 LR：目录补足或结束
+        return;
+      }
+      // ③ 课程详情页：识别当前课 → 进第一个未完成课件；全部已完成 → 计学分调度下一步
+      if (/course\.aspx/i.test(path)) {
+        var cid = (location.href.match(/cid=([A-Za-z0-9-]+)/i) || [])[1];
+        var pageTitle = "";
+        try {
+          var tEl = document.querySelector("h3 strong");
+          pageTitle = tEl ? (tEl.innerText || "").trim() : "";
+        } catch (e) {}
+        var pn = hyuCreditTitleNorm(pageTitle);
+        var isCur = cur && cid && cid.toLowerCase() === cur.cid.toLowerCase();
+        if (!isCur && pn) {
+          // 【v2.10.2 修正】采纳规则收紧：只采纳「学习记录待修课」或「LR 修完后的队列课」；
+          // 与计划无关的课（如随手点开的目录课）不再抢当当前课——按计划目标导航离开。
+          // （此前任何课都会被采纳 → 出现"跳到学习记录里没有的课"）
+          var credit = null;
+          var lrHitP = lrPending.filter(function (r) {
+            var n = hyuCreditTitleNorm(r.name);
+            return n.indexOf(pn) !== -1 || pn.indexOf(n) !== -1;
+          })[0];
+          var qIdx = -1;
+          if (!lrHitP && lrPending.length === 0) {
+            p.queue.forEach(function (q, qi) {
+              var qn = hyuCreditTitleNorm(q.title);
+              if (
+                qIdx === -1 &&
+                qn &&
+                (qn.indexOf(pn) !== -1 || pn.indexOf(qn) !== -1)
+              ) {
+                qIdx = qi;
+              }
+            });
+          }
+          if (lrHitP) {
+            credit = lrHitP.credit;
+          } else if (qIdx >= 0) {
+            credit = p.queue[qIdx].credit;
+          } else if (lrPending.length === 0) {
+            var lrAllHit = hyuCreditLROrdered().filter(function (r) {
+              var n = hyuCreditTitleNorm(r.name);
+              return n.indexOf(pn) !== -1 || pn.indexOf(n) !== -1;
+            })[0];
+            if (lrAllHit) credit = lrAllHit.credit;
+          }
+          if (credit !== null) {
+            // 计划内课程：采纳为当前课
+            p.current = { cid: cid, credit: credit, title: pageTitle };
+            p.visited = p.visited || {};
+            p.visited[cid.toLowerCase()] = 1;
+            if (qIdx >= 0) p.queue.splice(qIdx, 1);
+            p.navLock = Date.now() + 10000;
+            hyuCreditSave(p);
+            hyToast(
+              "✓ 学分计划当前课程：" + pageTitle.slice(0, 24) + "（按" +
+                credit + "学分计）",
+            );
+          } else {
+            // 非计划课程：回计划目标（LR 待修优先）
+            p.navLock = Date.now() + 8000;
+            hyuCreditSave(p);
+            console.log(
+              "【子川助手·学分】" +
+                pageTitle.slice(0, 20) +
+                " 不在计划内，返回计划课程",
+            );
+            if (lrPending.length) {
+              location.href =
+                location.origin + "/pages/study_info_list.aspx";
+            } else if (p.queue[0]) {
+              location.href =
+                location.origin +
+                "/pages/course.aspx?cid=" +
+                p.queue[0].cid;
+            } else {
+              location.href = location.origin + "/cme/index";
+            }
+            return;
+          }
+        }
+        if (!p.current) {
+          // 识别失败（页面结构异常）：回当前课/队首/LR 页/目录
+          p.navLock = Date.now() + 8000;
+          hyuCreditSave(p);
+          if (cur) {
+            location.href =
+              location.origin + "/pages/course.aspx?cid=" + cur.cid;
+          } else if (lrPending.length) {
+            location.href = location.origin + "/pages/study_info_list.aspx";
+          } else if (p.queue[0]) {
+            location.href =
+              location.origin + "/pages/course.aspx?cid=" + p.queue[0].cid;
+          } else {
+            location.href = location.origin + "/cme/index";
+          }
+          return;
+        }
+        if (hyuCreditAllDone()) {
+          // 本课全部课件已完成 → 计学分 → 调度下一步
+          p.done.push({
+            cid: p.current.cid,
+            credit: p.current.credit,
+            title: p.current.title,
+          });
+          hyToast(
+            "📚 学分课完成：" + p.current.title + "（" + p.current.credit +
+              "学分），累计 " + hyuCreditCreditsDone(p) + "/" + p.target,
+          );
+          p.current = null;
+          p.navLock = Date.now() + 8000;
+          hyuCreditSave(p);
+          hyuCreditGotoNext(p);
+          return;
+        }
+        // 还有未完成课件：顶层直接进入第一个未完成课件的播放页（站内 302 到 polyv）
+        var fu = hyuCreditFirstUnfinished();
+        if (fu) {
+          p.navLock = Date.now() + 10000;
+          hyuCreditSave(p);
+          console.log(
+            "【子川助手·学分】进入课件（" + fu.status + "）：cwid=" + fu.cwid,
+          );
+          location.href =
+            location.origin + "/course_ware/course_ware.aspx?cwid=" + fu.cwid;
+          return;
+        }
+        return; // 课件条目还没有可进入的链接，等下一轮
+      }
+      // ④ 目录页：补足队列（LR 课程由 LR 阶段负责，目录只做补足且排除 LR 课程）
+      if (onCatalogPage) {
+        if (p.lrOnly) {
+          // 顺序播放模式：不补目录，回学习记录页继续
+          p.navLock = Date.now() + 8000;
+          hyuCreditSave(p);
+          location.href = location.origin + "/pages/study_info_list.aspx";
+          return;
+        }
+        var need = Math.round((p.target - gotCred) * 10) / 10;
+        var ex = {};
+        p.done.forEach(function (d) {
+          ex[d.cid.toLowerCase()] = 1;
+        });
+        Object.keys(p.visited || {}).forEach(function (k) {
+          ex[k] = 1;
+        });
+        if (p.current) ex[p.current.cid.toLowerCase()] = 1;
+        // 排除学习记录课程（编号/名称匹配的目录候选）——它们由 LR 阶段调度
+        var lrNames = hyuLrOrdered(hyuCreditLRLoad()).map(function (r) {
+          return hyuCreditTitleNorm(r.name);
+        });
+        var cands = hyuCreditCandidates().filter(function (c) {
+          var cn = hyuCreditTitleNorm(c.title);
+          return !lrNames.some(function (ln) {
+            return ln.indexOf(cn) !== -1 || cn.indexOf(ln) !== -1;
+          });
+        });
+        if (need > 0 && !p.queue.length) {
+          p.queue = hyuCreditBuildQueue(need, cands, [], ex);
+          hyuCreditSave(p);
+        }
+        if (p.queue[0]) {
+          p.navLock = Date.now() + 8000;
+          hyuCreditSave(p);
+          location.href =
+            location.origin + "/pages/course.aspx?cid=" + p.queue[0].cid;
+          return;
+        }
+        if (need > 0) {
+          hyToast("⚠️ 目录里暂时找不到更多可学课程，10 分钟后重试");
+          p.navLock = Date.now() + 600000;
+          hyuCreditSave(p);
+          return;
+        }
+        p.active = false;
+        hyuCreditSave(p);
+        hyuCreditRefreshStatus();
+        hyToast("🎉 学分目标达成：已修 " + p.done.length + " 门 / " + gotCred + " 学分");
+        return;
+      }
+      // ⑤ 其他页面：回当前课程页 / LR 页 / 队首 / 目录
+      p.navLock = Date.now() + 8000;
+      hyuCreditSave(p);
+      if (p.current) {
+        console.log("【子川助手·学分】从 " + path + " 回到当前课程：" + p.current.title);
+        location.href =
+          location.origin + "/pages/course.aspx?cid=" + p.current.cid;
+      } else if (lrPending.length) {
+        location.href = location.origin + "/pages/study_info_list.aspx";
+      } else if (p.queue[0]) {
+        location.href =
+          location.origin + "/pages/course.aspx?cid=" + p.queue[0].cid;
+      } else {
+        location.href = location.origin + "/cme/index";
+      }
+    }
+    setInterval(hyuCreditTick, 5000);
+    hyuCreditRefreshStatus();
+
     // 【v2.4.0】全部刷完系统通知（Web Notification；浏览器未授权时静默降级为控制台日志，
     // 授权请求由浏览器在首次触发时弹出，被拒后不再打扰）
     var __allDoneNotified = false;
@@ -3851,6 +5046,17 @@ function __hyInit__() {
 
     // 课程列表页：自动扫描并进入待学习课程
     function autoEnterCourse() {
+      // 【v2.9.1 修正】学分计划激活时只在「目录页」（cme.aspx 等）让位给 hyuCreditTick；
+      // 课程详情页（course.aspx）必须照常执行——它负责点进第一个课件，禁掉就会卡在详情页
+      var __cp = hyuCreditLoad();
+      if (
+        __cp &&
+        __cp.active &&
+        location.pathname.toLowerCase().indexOf("course.aspx") === -1
+      ) {
+        console.log("【子川助手·学分】目录页让位给学分计划调度");
+        return;
+      }
       console.log("【子川助手】自动扫描课程列表中...");
 
       // 辅助函数：查找与状态元素关联的课程链接
