@@ -1,5 +1,5 @@
 ﻿// ==UserScript==
-// @name         🥇【子川助手 v2.8.5】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
+// @name         🥇【子川助手 v2.8.5】全网唯一|无人值守|自动静音|视频助手|考试助手|不疲劳
 // @namespace    http://tampermonkey.net/
 // @version      2.10.6
 // @description  适配华医网 2026.11 最新页面（v2.8.6 AI报错带服务端原文；v2.8.5 实测修复 Anthropic 兼容层思考块解析+max_tokens；v2.8.4 修切课清空中间库+桥状态实时显示）
