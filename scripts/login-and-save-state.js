@@ -138,7 +138,7 @@ async function waitForManualLogin(page, timeoutMs = 300000) {
       const b = document.createElement('div');
       b.id = '__auto_login_banner__';
       b.style.cssText = 'position:fixed!important;top:0!important;left:0!important;right:0!important;z-index:2147483647!important;background:#4caf50!important;color:#fff!important;text-align:center!important;padding:12px!important;font:bold 16px/1.4 "Microsoft YaHei",sans-serif!important;box-shadow:0 2px 8px rgba(0,0,0,.4)!important;';
-      b.innerHTML = '🤖 华医网小助手·正在自动导航到登录页<br><span style="font-size:13px;font-weight:normal;opacity:.95;">请勿操作浏览器，脚本会自动完成后续步骤</span>';
+      b.innerHTML = '🤖 子川助手·正在自动导航到登录页<br><span style="font-size:13px;font-weight:normal;opacity:.95;">请勿操作浏览器，脚本会自动完成后续步骤</span>';
       (document.body || document.documentElement).appendChild(b);
     });
 
@@ -364,7 +364,7 @@ async function waitForManualLogin(page, timeoutMs = 300000) {
     banner.style.cssText = 'position:fixed!important;top:0!important;left:0!important;right:0!important;z-index:2147483647!important;color:#fff!important;text-align:center!important;padding:12px!important;font:bold 16px/1.4 "Microsoft YaHei",sans-serif!important;box-shadow:0 2px 8px rgba(0,0,0,.4)!important;';
     if (auto) {
       banner.style.background = '#ff1744';
-      banner.innerHTML = '🤖 华医网小助手·自动登录中（AI 识别图形验证码）<br><span style="font-size:13px;font-weight:normal;opacity:.95;">请勿操作键盘鼠标！脚本会在 5~15 秒内完成登录，浏览器窗口会自动关闭。</span>';
+      banner.innerHTML = '🤖 子川助手·自动登录中（AI 识别图形验证码）<br><span style="font-size:13px;font-weight:normal;opacity:.95;">请勿操作键盘鼠标！脚本会在 5~15 秒内完成登录，浏览器窗口会自动关闭。</span>';
     } else {
       banner.style.background = '#1976d2';
       banner.innerHTML = '👤 请手动输入下方的图形验证码并点击登录<br><span style="font-size:13px;font-weight:normal;opacity:.95;">账号密码已自动填好。登录成功后脚本会自动导出登录态并关闭窗口。</span>';
@@ -421,8 +421,17 @@ async function waitForManualLogin(page, timeoutMs = 300000) {
     await page.waitForTimeout(300);
 
     await page.evaluate(() => {
+      // 登录按钮兼容两代结构：旧版 button.btn_login（部分区域子域可能未改版）；
+      // 2026.11 起密码卡片内是无 id/class 的 <button>登 录</button>，按文本+可见性匹配
       const btns = document.querySelectorAll('button.btn_login');
       for (const b of btns) { const r = b.getBoundingClientRect(); if (r.width > 100 && r.y > 100) { b.click(); return; } }
+      const card = Array.from(document.querySelectorAll('.card_box')).find(c => c.querySelector('#txt_user_pwd'));
+      const scope = card || document;
+      for (const b of scope.querySelectorAll('button')) {
+        const t = (b.textContent || '').replace(/\s+/g, '');
+        const r = b.getBoundingClientRect();
+        if (t === '登录' && r.width > 0) { b.click(); return; }
+      }
     });
     await page.waitForTimeout(4000);
 
