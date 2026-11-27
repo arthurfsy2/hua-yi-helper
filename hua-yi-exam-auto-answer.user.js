@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         🧠 子川助手·统一考核自动答题 v1.4.3（题库+百度/AI互斥作答）
+// @name         🧠 子川助手·统一考核自动答题 v1.4.5（题库+百度/AI互斥作答）
 // @namespace    http://tampermonkey.net/
-// @version      1.4.3
+// @version      1.4.5
 // @description  子川助手配套脚本：华医网统一课程考核(sdnew.91huayi.com)自动答题。作答链：题库/记忆 → 百度搜索 → AI → 提示人工（百度与AI互斥开关，默认全关）；记忆可导出纯问答JSON永久保存；内置2026公需课20题题库。不自动交卷，答完后提示人工核对。
 // @author       Lin (WorkBuddy)
 // @license      AGPL License
@@ -119,7 +119,7 @@
   // 【v1.3.0】双格式兼容：地址以 /anthropic 结尾走 Anthropic Messages 格式
   // （如智谱 https://open.bigmodel.cn/api/anthropic），否则走 OpenAI Chat 格式
   async function aiAskOnline(question, options, isJudge) {
-    const base = (lsGet('hyu_ai_base') || '').replace(/\/+$/, '');
+    let base = (lsGet('hyu_ai_base') || '').replace(/\/+$/, '');
     const prompt = isJudge
       ? '你正在帮助用户完成继续教育考试判断题，请判断正误。\n题目：' + question +
         '\n只输出一个字：对 或 错，不要输出任何其他内容。'
@@ -128,6 +128,9 @@
         '\n只输出正确选项的字母（多选把字母连写，如 ABCD），不要输出任何其他内容。';
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 20000);
+    // 【v1.4.5】DeepSeek /anthropic 兼容层请求体校验不稳定（部分环境 422 反序列化失败）
+    // → 自动规范化到稳定的 /v1 OpenAI 格式（同一把 Key 两端点通用）；其他厂商不受影响
+    if (/api\.deepseek\.com/i.test(base)) base = base.replace(/\/anthropic$/i, '/v1');
     const isAnthropic = /\/anthropic\/?$/i.test(base);
     let res;
     try {
@@ -147,7 +150,12 @@
         signal: ctrl.signal,
       });
     } finally { clearTimeout(to); }
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      //【v1.4.4】带上服务端具体原因（422=参数错误，响应体写明哪个字段不合法）
+      let errBody = '';
+      try { errBody = (await res.text()).slice(0, 120); } catch (e) {}
+      throw new Error('HTTP ' + res.status + (errBody ? ': ' + errBody : ''));
+    }
     const data = await res.json();
     // 【v1.4.3】Anthropic 兼容层 content 是分块数组且第一块可能是思考块（无 text 字段）——
     // 只读 content[0].text 会永远取到空；扫全块拼 text，没有再退 thinking 文本
@@ -422,7 +430,7 @@
     const SD_PRESETS = [
       { name: '硅基·免费', base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', tip: 'cloud.siliconflow.cn 注册送额度，标 FREE 的模型完全免费' },
       { name: '通义千问', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-flash', tip: '阿里云百炼控制台，qwen-flash 有免费额度' },
-      { name: 'DeepSeek', base: 'https://api.deepseek.com/v1', model: 'deepseek-chat', tip: 'platform.deepseek.com，付费但答上百题约几分钱' },
+      { name: 'DeepSeek', base: 'https://api.deepseek.com/anthropic', model: 'deepseek-flash', tip: 'platform.deepseek.com，付费但答上百题约几分钱' },
     ];
     box.querySelector('#hyu-sd-cfg').onclick = () => {
       let menu = '选择 AI 模型预设（输入序号回车；直接回车默认①）：\n';

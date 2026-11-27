@@ -1,9 +1,9 @@
 ﻿// ==UserScript==
 // @name         🥇【子川助手 v2.8.5】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
 // @namespace    http://tampermonkey.net/
-// @version      2.8.5
-// @description  适配华医网 2026.11 最新页面（v2.8.5 实测修复 Anthropic 兼容层思考块解析+max_tokens；v2.8.4 修切课清空中间库+桥状态实时显示）
-// @author       四创作者：Arthurfsy2   三创作者：Mriio   二创作者：境界程序员   原创作者：Dr.S
+// @version      2.8.8
+// @description  适配华医网 2026.11 最新页面（v2.8.6 AI报错带服务端原文；v2.8.5 实测修复 Anthropic 兼容层思考块解析+max_tokens；v2.8.4 修切课清空中间库+桥状态实时显示）
+// @author       五创作者:吴喻伦比 四创作者：Arthurfsy2   三创作者：Mriio   二创作者：境界程序员   原创作者：Dr.S
 // @license      AGPL License
 // @match        *://*.91huayi.com/course_ware/course_ware_polyv.aspx?*
 // @match        *://*.91huayi.com/course_ware/course_ware_cc.aspx*
@@ -20,9 +20,11 @@
 // 脚本版本号（单一来源）。油猴环境优先读 GM_info；
 // 通过自动化框架（Playwright/WorkBuddy 等）注入时 GM_info 不存在，回退到此常量。
 // ⚠️ 修改时需与顶部 @version 及 @name 中的版本号保持一致。
-var HYU_VERSION = "2.8.5";
+var HYU_VERSION = "2.8.8";
 
 var newupdate =
+  "2026.11.27 v2.8.7 DeepSeek 专例：/anthropic 地址自动规范化为 /v1（OpenAI 格式）——实测 /anthropic 兼容层对请求体校验不稳定（同一体部分环境 422 反序列化失败），/v1 处处稳定且支持关思考；同 Key 两端点通用，配置无需改\n" +
+  "2026.11.27 v2.8.6 AI报错带上服务端原文（422=参数错误，响应体写明哪个字段不合法，如模型名抄错带脚注；401=Key无效 402=余额不足），不再只报状态码猜原因\n" +
   "2026.11.27 v2.8.5 实测修复 AI「响应无文本」：DeepSeek Anthropic 兼容层 content 是分块数组且第一块是思考块（[{thinking},{text}]），旧解析只读第一块→永远空。现扫全块拼 text、无 text 块退 thinking；max_tokens 1024→4096（防长题思考耗尽截断）。用真实 Key 端到端验证 /anthropic 与 /v1 两格式均正确返回；AI 请求自动加 thinking:disabled 关闭思考（选择题无需推理，实测输出 13token→1token，两格式同参数均生效）\n" +
   "2026.11.27 v2.8.4 修复：切到另一节课会把中间库（历轮试错攒的正确答案）清空——进课页只清单次考试临时键，中间库仅在考试通过后清理；面板桥状态改 hyHasBridge 实时刷新（修“桥正常工作却显示未装”假象）；AI 空响应时亮出响应结构+原文片段定位真因；deepseek-chat/reasoner 下线提示\n" +
   "2026.11.27 v2.8.3 搜索桥检测加固：新增 DOM 事件通道（油猴沙箱隔离时 window 属性互不可见=「已装桥却提示未安装」的根因），桥脚本请更新到 v1.1.0；AI 响应解析兜底（reasoning模型/分段content/接口报错直透不再吞成“未返回选项字母”），DeepSeek 预设更新 deepseek-flash（2026 在售）；题库导出纳入考试中间库（未通过轮次已确认正确的题也能导出）\n" +
@@ -1579,6 +1581,13 @@ function __hyInit__() {
     // 失败抛异常，由调用方回退。
     async function aiAskChoice(question, optionTexts, multi) {
       var base = (localStorage.getItem("hyu_ai_base") || "").replace(/\/+$/, "");
+      // 【v2.8.7】DeepSeek 专例：/anthropic 兼容层对请求体校验不稳定（同一体从部分环境发
+      // 422 "Failed to deserialize the JSON body"、部分环境 200——实测复现结论），而 /v1
+      // OpenAI 格式处处稳定且支持关思考。DeepSeek 同一把 Key 两个端点通用 → 自动规范化
+      // 到 /v1（用户配置无需改动）。其他厂商（智谱 /api/anthropic 等）不受影响。
+      if (/api\.deepseek\.com/i.test(base)) {
+        base = base.replace(/\/anthropic$/i, "/v1");
+      }
       var promptTxt =
         "你正在帮助用户完成医学继续教育课程测试，请选出正确选项。\n" +
         "题目：" +
@@ -1626,11 +1635,11 @@ function __hyInit__() {
                     // 【实测】关闭思考模式：选择字母这种任务不需要推理，输出从13token降到1
                     // （DeepSeek Anthropic 兼容层用原生 thinking 参数；文档的 reasoning.effort=none 实测无效）
                     thinking: { type: "disabled" },
-                    messages: [{ role: "user", content: prompt }],
+                    messages: [{ role: "user", content: promptTxt }],
                   }
                 : {
                     model: localStorage.getItem("hyu_ai_model"),
-                    messages: [{ role: "user", content: prompt }],
+                    messages: [{ role: "user", content: promptTxt }],
                     temperature: 0,
                     // 【实测】OpenAI 格式同参数生效：无 reasoning_content，输出仅 1 token
                     thinking: { type: "disabled" },
@@ -1642,7 +1651,15 @@ function __hyInit__() {
       } finally {
         clearTimeout(to);
       }
-      if (!res.ok) throw new Error("HTTP " + res.status);
+      if (!res.ok) {
+        //【v2.8.6】带上服务端返回的具体原因（422=参数错误，响应体写明哪个字段不合法；
+        // 401=Key无效 402=余额不足），不再只报状态码让人猜
+        var errBody = "";
+        try {
+          errBody = (await res.text()).slice(0, 120);
+        } catch (e2) {}
+        throw new Error("HTTP " + res.status + (errBody ? ": " + errBody : ""));
+      }
       // 【v2.8.3】先取原文再解析：JSON 解析失败时能把响应开头放进报错（地址填错会返回 HTML 页）
       var rawText = await res.text();
       var data;
@@ -2555,7 +2572,7 @@ function __hyInit__() {
             </div>
             <div id="speedSection" class="hyu-sec" title="服务端校验真实观看时长：>1x 提前播完会被拒（时长不足需重看），默认恒为 1x">
                 <span class="hyu-sec-t">速度</span>
-                <span style="font-size:11px;color:#999;">默认1x（>1x 可能被拒需重看）</span>
+                <span style="font-size:11px;color:#999;">默认1x（>1x 可能被拒需重看，建议1和1.5x选择）</span>
                 <div class="hyu-speed-row">
                     <span class="speedBtn" data-rate="1">1x</span>
                     <span class="speedBtn" data-rate="1.5">1.5x</span>
@@ -2568,7 +2585,7 @@ function __hyInit__() {
             </div>
             <div id="hyu-ai-section" class="hyu-sec">
                 <span class="hyu-sec-t">联网答题</span>
-                <span style="font-size:11px;color:#999;">题库未命中时作答</span>
+                <span style="font-size:11px;color:#999;">题库未命中时作答（AI准确率高(付费但极便宜（答百题约几分钱，但需手动配置）。)，百度看脸）</span>
                 <div id="hyu-ai-status">读取中…</div>
                 <div class="hyu-btnrow">
                     <span id="hyu-ai-toggle" class="hyu-btn" title="AI 作答总开关（默认关；配置并在「测试」通过后自动开启，也可手动切换）">AI:关</span>
@@ -2981,11 +2998,11 @@ function __hyInit__() {
             if (hint) hint.style.display = "none";
             document.getElementById("hyu-ai-in-base").value =
               localStorage.getItem("hyu_ai_base") ||
-              "https://open.bigmodel.cn/api/anthropic";
+              "https://api.deepseek.com/anthropic";
             document.getElementById("hyu-ai-in-key").value =
               localStorage.getItem("hyu_ai_key") || "";
             document.getElementById("hyu-ai-in-model").value =
-              localStorage.getItem("hyu_ai_model") || "glm-5-flash";
+              localStorage.getItem("hyu_ai_model") || "deepseek-flash";
             try {
               document.getElementById("hyu-ai-in-key").focus();
             } catch (e) {}
