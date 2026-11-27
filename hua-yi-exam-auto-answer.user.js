@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         🧠 子川助手·统一考核自动答题 v1.4.0（题库+百度/AI互斥作答）
+// @name         🧠 子川助手·统一考核自动答题 v1.4.3（题库+百度/AI互斥作答）
 // @namespace    http://tampermonkey.net/
-// @version      1.4.0
+// @version      1.4.3
 // @description  子川助手配套脚本：华医网统一课程考核(sdnew.91huayi.com)自动答题。作答链：题库/记忆 → 百度搜索 → AI → 提示人工（百度与AI互斥开关，默认全关）；记忆可导出纯问答JSON永久保存；内置2026公需课20题题库。不自动交卷，答完后提示人工核对。
 // @author       Lin (WorkBuddy)
 // @license      AGPL License
@@ -136,18 +136,35 @@
         headers: isAnthropic
           ? { 'Content-Type': 'application/json', 'x-api-key': lsGet('hyu_ai_key'), 'anthropic-version': '2023-06-01' }
           : { 'Content-Type': 'application/json', Authorization: 'Bearer ' + lsGet('hyu_ai_key') },
-        body: JSON.stringify(isAnthropic
-          ? { model: lsGet('hyu_ai_model'), max_tokens: 1024, messages: [{ role: 'user', content: prompt }] }
-          : { model: lsGet('hyu_ai_model'), messages: [{ role: 'user', content: prompt }], temperature: 0 }),
+        // 【v1.4.3】①thinking disabled：选择题无需推理，实测输出 13token→1token（两格式同参数均生效）
+        // ②max_tokens 4096：防推理模型思考耗尽把 text 块截断为空
+        body: JSON.stringify(Object.assign(
+          { thinking: { type: 'disabled' } },
+          isAnthropic
+            ? { model: lsGet('hyu_ai_model'), max_tokens: 4096, messages: [{ role: 'user', content: prompt }] }
+            : { model: lsGet('hyu_ai_model'), messages: [{ role: 'user', content: prompt }], temperature: 0 }
+        )),
         signal: ctrl.signal,
       });
     } finally { clearTimeout(to); }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
-    const content = (isAnthropic
-      ? String((data.content && data.content[0] && data.content[0].text) || '')
-      : String((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '')
-    ).trim();
+    // 【v1.4.3】Anthropic 兼容层 content 是分块数组且第一块可能是思考块（无 text 字段）——
+    // 只读 content[0].text 会永远取到空；扫全块拼 text，没有再退 thinking 文本
+    let raw0 = '';
+    if (isAnthropic) {
+      const blocks = Array.isArray(data.content) ? data.content : [];
+      const txt = [], think = [];
+      for (const b of blocks) {
+        if (b && typeof b.text === 'string' && b.text) txt.push(b.text);
+        else if (b && typeof b.thinking === 'string' && b.thinking) think.push(b.thinking);
+      }
+      raw0 = txt.join(' ') || think.join(' ');
+    } else {
+      const msg0 = data.choices && data.choices[0] && data.choices[0].message;
+      raw0 = (msg0 && (msg0.content || msg0.reasoning_content)) || '';
+    }
+    const content = String(raw0).trim();
     if (isJudge) {
       if (/[错误×x]/.test(content)) return '错';
       if (/[对√]/.test(content)) return '对';
@@ -193,9 +210,36 @@
       .replace(/\s+/g, ' ');
   }
 
-  // 【v1.2.2→v1.3.4】搜索：传输链 = 配套「搜索桥」（GM直连百度，秒回）→ 公共代理兜底；
+  // 【v1.2.2→v1.4.1】搜索：传输链 = 配套「搜索桥」（GM直连百度，秒回）→ 桥事件通道兜底
+  // （v1.1.0 桥：沙箱隔离时 window 属性互不可见，DOM 事件一定能穿透）→ 公共代理兜底；
   // 全部不可达熔断 10 分钟。百度优先、必应备选。
   let searchDeadUntil = 0;
+  let bridgeSeen = false;
+  document.addEventListener('hySearchBridgeReady', () => { bridgeSeen = true; });
+  document.addEventListener('hySearchPong', () => { bridgeSeen = true; });
+  function bridgeProbe() {
+    return new Promise((resolve) => {
+      if (typeof window.__hySearchWeb === 'function' || bridgeSeen) return resolve(true);
+      const to = setTimeout(() => resolve(false), 600);
+      document.addEventListener('hySearchPong', () => { clearTimeout(to); resolve(true); }, { once: true });
+      try { document.dispatchEvent(new CustomEvent('hySearchPing')); } catch (e) { clearTimeout(to); resolve(false); }
+    });
+  }
+  function bridgeFetchViaEvents(url, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const id = 'hys' + Date.now() + Math.floor(Math.random() * 100000);
+      const evtName = 'hySearchRes_' + id;
+      const to = setTimeout(() => { cleanup(); reject(new Error('桥事件通道超时')); }, timeoutMs || 15000);
+      function onRes(e) {
+        const d = e.detail || {};
+        clearTimeout(to); cleanup();
+        if (d.ok) resolve(d.text); else reject(new Error(d.err || '桥请求失败'));
+      }
+      function cleanup() { document.removeEventListener(evtName, onRes); }
+      document.addEventListener(evtName, onRes);
+      document.dispatchEvent(new CustomEvent('hySearchReq', { detail: { id, url } }));
+    });
+  }
   async function searchFetchPage(url) {
     try {
       if (typeof window.__hySearchWeb === 'function') {
@@ -203,6 +247,12 @@
         if (viaBridge && viaBridge.length > 300) return viaBridge;
       }
     } catch (e) {}
+    if (await bridgeProbe()) {
+      try {
+        const viaEvt = await bridgeFetchViaEvents(url);
+        if (viaEvt && viaEvt.length > 300) return viaEvt;
+      } catch (e) {}
+    }
     return await fetchViaProxy(url, 12000);
   }
   async function freeSearchAnswer(question, options, isJudge) {
@@ -222,11 +272,18 @@
         const j = text.match(/答案\s*[：:是为]*\s*(对|错|正确|错误|√|×)/);
         if (j) { log('🔍 百度/必应命中（判断题）→ ' + j[1]); return /[错误×]/.test(j[1]) ? '错' : '对'; }
       } else {
-        const m = text.match(/(?:正确答案|参考答案|【答案】|答案)\s*[：:是为于]*\s*([A-Z]{1,6})/);
+        // 【v1.4.1】与主脚本 v2.8.2 同步：支持小写「答案 :b」/全角「Ｂ」/多选「答案：A,B,C」
+        // （旧正则只认大写半角单串，多选被逗号截断只取到A）
+        const m = text.match(/(?:正确答案|参考答案|【答案】|答案)\s*[：:是为于]*\s*([A-Za-zＡ-Ｚａ-ｚ]{1,6}(?:\s*[,，、]\s*[A-Za-zＡ-Ｚａ-ｚ]{1,6}){0,5})/);
         if (m) {
           const maxLetter = String.fromCharCode(65 + Math.max(options.length - 1, 0));
           const uniq = [];
-          for (const L of m[1].split('')) if (L <= maxLetter && !uniq.includes(L)) uniq.push(L);
+          for (const raw of m[1].toUpperCase().split('')) {
+            let code = raw.charCodeAt(0);
+            if (code >= 0xff21 && code <= 0xff3a) code -= 0xfee0; // 全角Ａ-Ｚ转半角
+            const L = String.fromCharCode(code);
+            if (L >= 'A' && L <= maxLetter && !uniq.includes(L)) uniq.push(L);
+          }
           if (uniq.length) { log('🔍 百度/必应命中 → ' + uniq.join('')); return uniq.join(''); }
         }
       }

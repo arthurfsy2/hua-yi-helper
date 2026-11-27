@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         🔍 子川助手·搜索桥 v1.0.0（百度/必应直连，供主脚本搜索用）
+// @name         🔍 子川助手·搜索桥 v1.1.0（百度/必应直连，供主脚本搜索用）
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
-// @description  子川助手配套脚本：通过油猴 GM_xmlhttpRequest 直连抓取百度/必应搜索结果页（不受浏览器跨域限制，大陆网络可用）。主脚本/统一考核脚本会自动调用本脚本；不单独做任何事。装一次即可，建议与主脚本一起安装。
+// @version      1.1.0
+// @description  子川助手配套脚本：通过油猴 GM_xmlhttpRequest 直连抓取百度/必应搜索结果页（不受浏览器跨域限制，大陆网络可用）。主脚本/统一考核脚本会自动调用本脚本；不单独做任何事。装一次即可，建议与主脚本一起安装。v1.1.0 新增 DOM 事件通道（油猴沙箱下 window 属性互不可见时仍可用）。
 // @author       Lin (WorkBuddy)
 // @license      AGPL License
 // @match        *://*.91huayi.com/*
@@ -60,21 +60,51 @@
   // 暴露给页面：主脚本调用 window.__hySearchWeb(完整URL) → Promise<HTML文本>
   // 允许的目标域受 @connect 白名单限制，其他域 GM 会直接拒绝
   var ALLOWED = ["www.baidu.com", "m.baidu.com", "cn.bing.com", "www.bing.com"];
+  function gmSearch(url) {
+    try {
+      var ok = false;
+      for (var i = 0; i < ALLOWED.length; i++) {
+        if (String(url).indexOf("https://" + ALLOWED[i] + "/") === 0) ok = true;
+      }
+      if (!ok) return Promise.reject(new Error("域不在白名单"));
+      return gmGet(url);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+  }
   function install() {
     var target = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+    // 通道①：window 属性直调（页面上下文注入时可用）
     target.__hySearchWeb = function (url) {
-      try {
-        var ok = false;
-        for (var i = 0; i < ALLOWED.length; i++) {
-          if (String(url).indexOf("https://" + ALLOWED[i] + "/") === 0) ok = true;
-        }
-        if (!ok) return Promise.reject(new Error("域不在白名单"));
-        return gmGet(url);
-      } catch (e) {
-        return Promise.reject(e);
-      }
+      return gmSearch(url);
     };
-    target.__hySearchBridge = "1.0.0"; // 主脚本可用于显示"搜索桥已就绪"
+    target.__hySearchBridge = "1.1.0"; // 主脚本可用于显示"搜索桥已就绪"
+    // 通道②【v1.1.0】：DOM CustomEvent 事件通道——主脚本若因油猴沙箱隔离读不到
+    // window 属性（"已装桥却提示未安装"的根因），事件跨沙箱一定可达：
+    //   hySearchReq {id,url} → hySearchRes_<id> {ok,text|err}
+    //   hySearchPing → hySearchPong（探测桥是否在）；hySearchBridgeReady（安装广播）
+    document.addEventListener("hySearchReq", function (e) {
+      var d = (e.detail || {});
+      gmSearch(d.url).then(
+        function (text) {
+          document.dispatchEvent(
+            new CustomEvent("hySearchRes_" + d.id, {
+              detail: { ok: true, text: text },
+            }),
+          );
+        },
+        function (err) {
+          document.dispatchEvent(
+            new CustomEvent("hySearchRes_" + d.id, {
+              detail: { ok: false, err: String((err && err.message) || err) },
+            }),
+          );
+        },
+      );
+    });
+    document.addEventListener("hySearchPing", function () {
+      document.dispatchEvent(new CustomEvent("hySearchPong"));
+    });
   }
 
   if (document.readyState === "loading") {

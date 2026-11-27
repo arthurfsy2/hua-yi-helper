@@ -1,8 +1,8 @@
 ﻿// ==UserScript==
-// @name         🥇【子川助手 v2.8.1】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
+// @name         🥇【子川助手 v2.8.5】全网唯一真实免费|无人值守|自动静音|视频助手|考试助手|不疲劳
 // @namespace    http://tampermonkey.net/
-// @version      2.8.1
-// @description  适配华医网 2026.11 最新页面（v2.8.1 导出含课堂问答+空库原因说明+搜索自检按钮；v2.8.0 归一化匹配+题库→百度→AI→试错）
+// @version      2.8.5
+// @description  适配华医网 2026.11 最新页面（v2.8.5 实测修复 Anthropic 兼容层思考块解析+max_tokens；v2.8.4 修切课清空中间库+桥状态实时显示）
 // @author       四创作者：Arthurfsy2   三创作者：Mriio   二创作者：境界程序员   原创作者：Dr.S
 // @license      AGPL License
 // @match        *://*.91huayi.com/course_ware/course_ware_polyv.aspx?*
@@ -20,9 +20,13 @@
 // 脚本版本号（单一来源）。油猴环境优先读 GM_info；
 // 通过自动化框架（Playwright/WorkBuddy 等）注入时 GM_info 不存在，回退到此常量。
 // ⚠️ 修改时需与顶部 @version 及 @name 中的版本号保持一致。
-var HYU_VERSION = "2.8.1";
+var HYU_VERSION = "2.8.5";
 
 var newupdate =
+  "2026.11.27 v2.8.5 实测修复 AI「响应无文本」：DeepSeek Anthropic 兼容层 content 是分块数组且第一块是思考块（[{thinking},{text}]），旧解析只读第一块→永远空。现扫全块拼 text、无 text 块退 thinking；max_tokens 1024→4096（防长题思考耗尽截断）。用真实 Key 端到端验证 /anthropic 与 /v1 两格式均正确返回；AI 请求自动加 thinking:disabled 关闭思考（选择题无需推理，实测输出 13token→1token，两格式同参数均生效）\n" +
+  "2026.11.27 v2.8.4 修复：切到另一节课会把中间库（历轮试错攒的正确答案）清空——进课页只清单次考试临时键，中间库仅在考试通过后清理；面板桥状态改 hyHasBridge 实时刷新（修“桥正常工作却显示未装”假象）；AI 空响应时亮出响应结构+原文片段定位真因；deepseek-chat/reasoner 下线提示\n" +
+  "2026.11.27 v2.8.3 搜索桥检测加固：新增 DOM 事件通道（油猴沙箱隔离时 window 属性互不可见=「已装桥却提示未安装」的根因），桥脚本请更新到 v1.1.0；AI 响应解析兜底（reasoning模型/分段content/接口报错直透不再吞成“未返回选项字母”），DeepSeek 预设更新 deepseek-flash（2026 在售）；题库导出纳入考试中间库（未通过轮次已确认正确的题也能导出）\n" +
+  "2026.11.27 v2.8.2 实测修正：考试按钮解锁信号=disabled移除（href恒为#，旧判据导致模式2进不了考试+片尾自愈误判无限重看）；待考试未解锁先等30秒再跳课；搜索提取修补：小写/全角字母、多选A,B,C、优先取题干后最近答案\n" +
   "2026.11.27 v2.8.1 导出含课堂问答（改存答案文字）；空库时显示各题库统计与原因；新增「搜索自检」按钮定位桥/验证页/未命中；课堂问答优先级改为 题库→百度→AI→试错\n" +
   "2026.11.27 v2.8.0 修复「上次答对的题还答错」：题干归一化匹配题库；作答链改为 题库→百度搜索→AI→试错，百度与AI互斥开关\n" +
   "2026.11.26 v2.6.1 AI支持智谱Anthropic兼容接口（/api/anthropic，预填glm-5-flash）；修复模式2视频播完不进考试直接切课的漏判（考试按钮已解锁即进考试）\n" +
@@ -471,6 +475,7 @@ function __hyInit__() {
     var clockms = null; // killsendQuestion3 定时器引用（全局共享）
     var courseFinished = false; // 防止两个检测器重复触发跳转
     var navCooldownUntil = 0; // 跳转冷却期：此时间戳之前禁止再次跳转
+    var hyuExamWaitUntil = 0; //【v2.8.2】待考试但按钮未解锁时的等待截止时间（最多30s）
     var _lastCompletedCheck = 0; // debounce：连续两次读到"已完成"才真正触发
 
     advis();
@@ -632,7 +637,11 @@ function __hyInit__() {
           // 不是播放进度：>1x 提前"播完"会触发「观看时长不足」完成被拒（用户实测
           // 2x 同样被拒，v2.5.2 的开课速度策略已删除）。倍速按钮仅页内临时使用。
           var playRateNow = 1;
-          cleanKeyStorage();
+          // 【v2.8.4 修复】进课页只清单次考试的临时键（本次试错进度/错题表/答案暂存）。
+          // 原来调用 cleanKeyStorage() 连中间库 JJ_RightAnswer 一起清——切到另一节课
+          // 就把历轮试错攒下的正确答案全部抹掉（v2.8.3 导出计数含中间库后用户才看见）。
+          // 中间库只在考试「通过」时（doResult）随正式库合并后统一清理。
+          cleanExamTempOnly();
 
           // 【新增】刷新后检查：如果由暂停刷新触发，扫描侧边栏状态，已完成/待考试则跳转下一课程
           (function () {
@@ -831,7 +840,7 @@ function __hyInit__() {
                 var useAi = aiReady() && !useSearch; // 互斥：百度开则 AI 不参与
                 // 【v2.8.1】开百度但没装搜索桥——直连不可用只能走公共代理（大陆基本不通），
                 // 提前明确告知，避免"开了百度还是试错"却不知原因
-                if (useSearch && typeof window.__hySearchWeb !== "function") {
+                if (useSearch && !hyHasBridge()) {
                   hyToast(
                     "⚠️ 百度搜索已开但未装「搜索桥」脚本（hua-yi-search.user.js）——当前只能走公共代理，大概率搜不到、回退试错。安装后刷新即可直连",
                   );
@@ -1481,8 +1490,15 @@ function __hyInit__() {
 
     // changelayout 已移除 —— 旧版 jj 面板已被 advis() 取代
 
+    function cleanExamTempOnly() {
+      //【v2.8.4】单次考试的临时键：试错进度（keyTest）/错题表（keyResult）/本轮答案暂存
+      //（keyTestAnswer）。不含中间库 keyRightAnswer——那是跨课程复用的已确认正确答案。
+      localStorage.removeItem(keyTest);
+      localStorage.removeItem(keyResult);
+      localStorage.removeItem(keyTestAnswer);
+    }
     function cleanKeyStorage() {
-      //缓存清理
+      //缓存清理（仅考试「通过」时调用：中间库已并入正式库，此时才整体清空）
       localStorage.removeItem(keyTest);
       localStorage.removeItem(keyResult);
       localStorage.removeItem(keyTestAnswer);
@@ -1606,13 +1622,18 @@ function __hyInit__() {
               isAnthropic
                 ? {
                     model: localStorage.getItem("hyu_ai_model"),
-                    max_tokens: 1024,
-                    messages: [{ role: "user", content: promptTxt }],
+                    max_tokens: 4096, //【v2.8.5】1024 会被推理模型的思考耗尽→text块被截断为空
+                    // 【实测】关闭思考模式：选择字母这种任务不需要推理，输出从13token降到1
+                    // （DeepSeek Anthropic 兼容层用原生 thinking 参数；文档的 reasoning.effort=none 实测无效）
+                    thinking: { type: "disabled" },
+                    messages: [{ role: "user", content: prompt }],
                   }
                 : {
                     model: localStorage.getItem("hyu_ai_model"),
-                    messages: [{ role: "user", content: promptTxt }],
+                    messages: [{ role: "user", content: prompt }],
                     temperature: 0,
+                    // 【实测】OpenAI 格式同参数生效：无 reasoning_content，输出仅 1 token
+                    thinking: { type: "disabled" },
                   },
             ),
             signal: ctrl.signal,
@@ -1622,18 +1643,73 @@ function __hyInit__() {
         clearTimeout(to);
       }
       if (!res.ok) throw new Error("HTTP " + res.status);
-      var data = await res.json();
-      var content = isAnthropic
-        ? String(
-            (data.content && data.content[0] && data.content[0].text) || "",
-          )
-        : String(
-            (data.choices &&
-              data.choices[0] &&
-              data.choices[0].message &&
-              data.choices[0].message.content) ||
-              "",
+      // 【v2.8.3】先取原文再解析：JSON 解析失败时能把响应开头放进报错（地址填错会返回 HTML 页）
+      var rawText = await res.text();
+      var data;
+      try {
+        data = JSON.parse(rawText);
+      } catch (e2) {
+        throw new Error("响应不是 JSON（地址可能填错）: " + rawText.slice(0, 80));
+      }
+      // 【v2.8.3】接口层报错直接透传（模型名不存在/额度不足等，此前被吞成"未返回选项字母"）
+      if (data && data.error) {
+        var emsg =
+          (data.error && (data.error.message || data.error.msg)) ||
+          JSON.stringify(data.error);
+        throw new Error("接口报错: " + String(emsg).slice(0, 90));
+      }
+      var content;
+      if (isAnthropic) {
+        // 【v2.8.5 实测修复】DeepSeek/智谱 Anthropic 兼容层的 content 是分块数组，
+        // 第一个块可能是思考块：[{type:"thinking",thinking:...},{type:"text",text:"B"}]
+        // 旧解析只读 content[0].text → 永远取到空（"响应无文本"）。现扫全块拼 text；
+        // 连 text 块都没有再退 thinking 块（思考文本里也含答案字母，聊胜于无）。
+        var blocks = Array.isArray(data.content) ? data.content : [];
+        var txtParts = [];
+        var thinkParts = [];
+        for (var bi = 0; bi < blocks.length; bi++) {
+          var blk = blocks[bi] || {};
+          if (typeof blk.text === "string" && blk.text) txtParts.push(blk.text);
+          else if (typeof blk.thinking === "string" && blk.thinking)
+            thinkParts.push(blk.thinking);
+        }
+        content = txtParts.join(" ");
+        if (!content) content = thinkParts.join(" ");
+        if (
+          !content &&
+          data.stop_reason === "max_tokens"
+        ) {
+          throw new Error(
+            "思考超长被截断(stop_reason=max_tokens)——重试一次或换个模型",
           );
+        }
+      } else {
+        var msg0 =
+          data.choices && data.choices[0] && data.choices[0].message
+            ? data.choices[0].message
+            : null;
+        // 【v2.8.3】兜底：① reasoning 模型文本可能在 reasoning_content 而 content 为空
+        // ② 新版接口 content 可能是 [{type:"text",text:...}] 分段数组
+        var c0 = msg0 ? (msg0.content || msg0.reasoning_content || "") : "";
+        if (Array.isArray(c0)) {
+          c0 = c0
+            .map(function (p) {
+              return (p && p.text) || "";
+            })
+            .join("");
+        }
+        content = String(c0 || "");
+      }
+      // 【v2.8.4】所有兜底取完仍无文本 → 把响应结构和原文片段亮出来（模型名错/额度尽/
+      // 网关劫持都能一眼定位），不再吞成"未返回选项字母:"
+      if (!content) {
+        throw new Error(
+          "响应无文本(text/reasoning均空) 键[" +
+            (data ? Object.keys(data).join(",") : "?") +
+            "] 原文:" +
+            rawText.slice(0, 100),
+        );
+      }
       if (multi) {
         var letters = String(content).toUpperCase().match(/[A-Z]/g);
         if (!letters || !letters.length)
@@ -1712,30 +1788,54 @@ function __hyInit__() {
         .replace(/\s+/g, " ");
     }
 
-    // 在文本中找「答案」模式，返回字母串（"B" 或 "ABCD"）；校验字母在选项范围内
-    function extractAnswerPattern(text, optionCount) {
+    // 在文本中找「答案」模式，返回字母串（"B" 或 "ABC"）；校验字母在选项范围内
+    // 【v2.8.2】实测百度摘要里的真实形态修补：
+    // ① 小写「答案 :c」、全角「Ｂ」也认（旧正则只认大写半角→一直提取不到）；
+    // ② 多选「答案：A,B,C」整串提取（旧正则逗号截断只取到A）；
+    // ③ 整页第一条「答案：X」可能是别的题的（百度搜索框回显会导致题干校验假阳性）
+    //    → 若能定位题干，优先取题干之后 800 字内最近的一处。
+    function extractAnswerPattern(text, optionCount, stemHead) {
       if (!text) return null;
       var maxLetter = String.fromCharCode(65 + optionCount - 1);
-      // 优先匹配「正确答案/参考答案/答案」后跟字母
-      var patterns = [
-        /(?:正确答案|参考答案|【答案】|答案)\s*[：:是为于]*\s*([A-Z]{1,6})/,
-      ];
-      for (var pi = 0; pi < patterns.length; pi++) {
-        var m = text.match(patterns[pi]);
-        if (!m) continue;
-        var letters = m[1].split("").filter(function (L) {
-          return L >= "A" && L <= maxLetter;
-        });
-        if (letters.length) {
-          // 去重保序
-          var uniq = [];
-          for (var i = 0; i < letters.length; i++) {
-            if (uniq.indexOf(letters[i]) === -1) uniq.push(letters[i]);
+      var re = /(?:正确答案|参考答案|【答案】|答案)\s*[：:是为于]*\s*([A-Za-zＡ-Ｚａ-ｚ]{1,6}(?:\s*[,，、]\s*[A-Za-zＡ-Ｚａ-ｚ]{1,6}){0,5})/g;
+      var hits = [];
+      var m;
+      while ((m = re.exec(text)) !== null) {
+        var upper = m[1].toUpperCase();
+        var norm = "";
+        for (var i = 0; i < upper.length; i++) {
+          var code = upper.charCodeAt(i);
+          if (code >= 0xff21 && code <= 0xff3a) code -= 0xfee0; // 全角Ａ-Ｚ转半角
+          var ch = String.fromCharCode(code);
+          if (ch >= "A" && ch <= maxLetter && norm.indexOf(ch) === -1) norm += ch;
+        }
+        if (norm) hits.push({ idx: m.index, ans: norm });
+        if (m.index === re.lastIndex) re.lastIndex++; // 防零宽死循环
+      }
+      if (!hits.length) return null;
+      if (stemHead) {
+        var head = String(stemHead).replace(/\s+/g, "").slice(0, 15);
+        if (head) {
+          var stemRe = new RegExp(
+            head
+              .split("")
+              .map(function (c) {
+                return c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              })
+              .join("\\s*"),
+          );
+          var sm = stemRe.exec(text);
+          if (sm) {
+            var stemEnd = sm.index + sm[0].length;
+            for (var h = 0; h < hits.length; h++) {
+              if (hits[h].idx >= stemEnd && hits[h].idx - stemEnd < 800) {
+                return hits[h].ans;
+              }
+            }
           }
-          return uniq.join("");
         }
       }
-      return null;
+      return hits[0].ans; // 定位不到题干时退回旧行为：全页第一条
     }
 
     // 免费搜答案主入口：返回 "B"/"ABCD" 或 null。
@@ -1745,6 +1845,69 @@ function __hyInit__() {
     // AI 作答独立开关（hyu_ai_on），两者互不影响。
     var __hyuSearchDeadUntil = 0; // 搜索熔断：所有传输全失败后 10 分钟内直接跳过
     var __hyuSearchMissToasted = false; // 【v2.8.1】未命中提示每页只弹一次
+    // 【v2.8.3】搜索桥检测与事件通道：v1.0.0 桥只往 unsafeWindow 挂 __hySearchWeb，
+    // 油猴沙箱隔离时主脚本的 window 读不到它 → "明明装了桥却提示未安装"。
+    // DOM 事件跨沙箱一定可达：hySearchBridgeReady/hySearchPong 探测，hySearchReq/hySearchRes_<id> 传数据。
+    var __hyBridgeSeen = false;
+    var __hyBridgeProbed = false;
+    document.addEventListener("hySearchBridgeReady", function () {
+      __hyBridgeSeen = true;
+    });
+    document.addEventListener("hySearchPong", function () {
+      __hyBridgeSeen = true;
+    });
+    function hyHasBridge() {
+      return typeof window.__hySearchWeb === "function" || __hyBridgeSeen;
+    }
+    function hyBridgeProbe() {
+      // 探测事件通道上的桥（600ms 应答窗口；每页只主动探一次，之后靠缓存标志）
+      return new Promise(function (resolve) {
+        if (hyHasBridge()) return resolve(true);
+        if (__hyBridgeProbed) return resolve(false);
+        __hyBridgeProbed = true;
+        var to = setTimeout(function () {
+          resolve(false);
+        }, 600);
+        document.addEventListener(
+          "hySearchPong",
+          function () {
+            clearTimeout(to);
+            resolve(true);
+          },
+          { once: true },
+        );
+        try {
+          document.dispatchEvent(new CustomEvent("hySearchPing"));
+        } catch (e) {
+          clearTimeout(to);
+          resolve(false);
+        }
+      });
+    }
+    function hyBridgeFetchViaEvents(url, timeoutMs) {
+      return new Promise(function (resolve, reject) {
+        var id = "hys" + Date.now() + Math.floor(Math.random() * 100000);
+        var evtName = "hySearchRes_" + id;
+        var to = setTimeout(function () {
+          cleanup();
+          reject(new Error("桥事件通道超时"));
+        }, timeoutMs || 15000);
+        function onRes(e) {
+          var d = (e.detail || {});
+          clearTimeout(to);
+          cleanup();
+          if (d.ok) resolve(d.text);
+          else reject(new Error(d.err || "桥请求失败"));
+        }
+        function cleanup() {
+          document.removeEventListener(evtName, onRes);
+        }
+        document.addEventListener(evtName, onRes);
+        document.dispatchEvent(
+          new CustomEvent("hySearchReq", { detail: { id: id, url: url } }),
+        );
+      });
+    }
     function searchOn() {
       try {
         return localStorage.getItem("hyu_search_on") === "1";
@@ -1753,20 +1916,27 @@ function __hyInit__() {
       }
     }
     async function searchFetchPage(url) {
-      // ① 搜索桥（推荐：装配套 hua-yi-search.user.js 后即走此路径）
+      // ① 搜索桥·window 直调（页面上下文注入时可用）
       try {
         if (typeof window.__hySearchWeb === "function") {
           var viaBridge = await window.__hySearchWeb(url);
           if (viaBridge && viaBridge.length > 300) return viaBridge;
         }
       } catch (e) {}
-      // ② 公共代理兜底
+      // ②【v2.8.3】搜索桥·事件通道（沙箱隔离时的兜底）
+      if (await hyBridgeProbe()) {
+        try {
+          var viaEvt = await hyBridgeFetchViaEvents(url);
+          if (viaEvt && viaEvt.length > 300) return viaEvt;
+        } catch (e2) {}
+      }
+      // ③ 公共代理兜底
       return await fetchViaProxy(url, 12000);
     }
     async function freeSearchAnswer(question, optionTexts) {
       if (!searchOn()) return null;
       if (Date.now() < __hyuSearchDeadUntil) return null;
-      var hasBridge = typeof window.__hySearchWeb === "function";
+      var hasBridge = hyHasBridge(); //【v2.8.3】含事件通道探测标志
       var query = String(question).slice(0, 60) + " 答案";
       var engines = [
         { name: "百度", url: "https://www.baidu.com/s?wd=" },
@@ -1800,13 +1970,23 @@ function __hyInit__() {
           continue;
         }
         var text = searchHtmlToText(html);
-        // 先确认结果里确实包含题干片段（防止乱匹配别的题）
+        // 【v2.8.2】区分「真没搜到」与「搜到但没答案」：百度无结果页有固定提示语
+        if (
+          text.indexOf("没有找到相关结果") !== -1 ||
+          text.indexOf("很抱歉，没有找到") !== -1
+        ) {
+          console.log(
+            "【子川助手·搜索】" + engines[ei].name + " 无相关结果（题库外新题，网上暂无该题）",
+          );
+          continue;
+        }
+        // 题干包含校验（注意：搜索框会回显查询词，此项为弱校验，提取时另做就近定位）
         var qHead = String(question).replace(/\s+/g, "").slice(0, 15);
         if (qHead && text.replace(/\s+/g, "").indexOf(qHead) === -1) {
           console.log("【子川助手·搜索】" + engines[ei].name + " 搜到结果但不含本题题干（题库外新题，网上暂无答案）");
           continue;
         }
-        var ans = extractAnswerPattern(text, optionTexts.length);
+        var ans = extractAnswerPattern(text, optionTexts.length, question);
         if (ans) {
           gotAny = true;
           console.log(
@@ -1898,7 +2078,8 @@ function __hyInit__() {
           if (
             v.currentTime >= v.duration - 3 &&
             st !== "已完成" &&
-            st !== "待考试"
+            st !== "待考试" &&
+            !hyExamBtnUnlocked() //【v2.8.2】考试按钮已解锁=完成已被接受（徽章可能延迟显示"学习中"），重看会死循环
           ) {
             flagged = true; // 片尾 + 未通过 → 需要重看补时长
           }
@@ -1954,7 +2135,7 @@ function __hyInit__() {
 
         if (
           state == "已完成" ||
-          hreftest != "#" ||
+          hyExamBtnUnlocked() || //【v2.8.2】href恒为#，改判 disabled 已移除
           (typeof getMaxPlayTime == "function" ? getMaxPlayTime() | 0 : 1) ==
             (typeof player.j2s_getDuration == "function"
               ? player.j2s_getDuration() | 0
@@ -1974,11 +2155,11 @@ function __hyInit__() {
 
           if (
             localStorage.getItem("华医mode") == "2" &&
-            (state == "待考试" || hreftest != "#")
+            (state == "待考试" || hyExamBtnUnlocked())
           ) {
             // 【v2.7.2】逐课考试：本课视频播完且考试按钮已解锁 → 立即进本课考试
             //（state=已完成 说明考试已通过，不重复进考）
-            if (hreftest != "#" && state != "已完成" && tryClickExamHere()) {
+            if (hyExamBtnUnlocked() && state != "已完成" && tryClickExamHere()) {
               return;
             }
             if (hasRemainingCourses()) {
@@ -2152,6 +2333,23 @@ function __hyInit__() {
           } else if (state == "待考试" && !inCooldown) {
             // 待考试：优先搜索学习中/未学习课程，找不到再进入考试
             if (courseFinished) return;
+            // 【v2.8.2】模式2：考试按钮未解锁（disabled 未移除，考试任务接口未返回）
+            // → 先等最多30秒再行动；等期内下个tick复查，解锁立即进考试，超时才跳下一课
+            if (localStorage.getItem("华医mode") == "2") {
+              if (!hyExamBtnUnlocked()) {
+                if (!hyuExamWaitUntil) {
+                  hyuExamWaitUntil = Date.now() + 30000;
+                  console.log(
+                    "【子川助手】本课待考试但考试按钮未解锁，最多等30秒（解锁即自动进考试）...",
+                  );
+                }
+                if (Date.now() < hyuExamWaitUntil) return; // 下个tick复查
+                console.log(
+                  "【子川助手】等待超时仍未解锁，跳下一课（本课保持待考试，后续补考）",
+                );
+              }
+              hyuExamWaitUntil = 0;
+            }
             courseFinished = true;
             clearInterval(clockms);
             clockms = null;
@@ -2600,25 +2798,35 @@ function __hyInit__() {
           aOnMain = localStorage.getItem("hyu_ai_on") === "1";
         } catch (e) {}
         if (aiConfigured()) {
+          var mdl = localStorage.getItem("hyu_ai_model") || "";
           el.innerHTML =
             "✓ 已配置：" +
-            localStorage.getItem("hyu_ai_model") +
+            mdl +
             (aOnMain ? "（AI开关:开）" : "（AI开关:关，点下方「AI」开启或测试通过自动开）") +
             "<br>上次AI调用：" +
             (lastAi || "尚未调用");
+          // 【v2.8.4】DeepSeek 旧模型已下线提示（用户存过 deepseek-chat 会一直"未返回选项字母"）
+          if (mdl === "deepseek-chat" || mdl === "deepseek-reasoner") {
+            el.innerHTML +=
+              '<br><span style="color:#c62828;">⚠ 该模型名已下线（2026 在售：deepseek-flash / deepseek-v4-pro）。请点「配置AI」→ 点一下「③DeepSeek」预设 → 保存 → 测试</span>';
+          }
           el.style.color = aOnMain ? "#2e7d32" : "#b26a00";
         } else {
           el.innerHTML =
             "AI 未配置（作答走：答案库→百度搜索→试错）<br>要用 AI：点「配置AI」→ 选预设 → 填 Key → 测试";
           el.style.color = "#666";
         }
-        // 【v2.7.3】搜索桥就绪提示
-        var bridgeOn =
-          typeof window.__hySearchWeb === "function" ||
-          window.__hySearchBridge;
+        // 【v2.7.3】搜索桥就绪提示；【v2.8.4】改用 hyHasBridge()（含事件通道标志）
+        // 并在桥就绪事件到达时自动刷新本区——旧逻辑只查 window 属性且只渲染一次，
+        // 桥走事件通道正常工作时这里仍显示"未装"，纯属假象
+        var bridgeOn = hyHasBridge();
         if (!bridgeOn) {
           el.innerHTML +=
-            '<br><span style="color:#c62828;">⚠ 未装「搜索桥」脚本：百度搜索只能走公共代理（大陆多不通）</span>';
+            '<br><span style="color:#c62828;">⚠ 未检测到「搜索桥」：请安装/更新 hua-yi-search.user.js 到 v1.1.0 后刷新（旧版只走公共代理，大陆基本不通）</span>';
+          // 异步探一次事件通道，桥在就自动重绘为就绪状态
+          hyBridgeProbe().then(function (ok) {
+            if (ok) refreshAiStatus();
+          });
         }
         var st2 = document.getElementById("hyu-search-toggle");
         if (st2) {
@@ -2642,6 +2850,9 @@ function __hyInit__() {
           at.style.color = aOn ? "#fff" : "#555";
         }
       }
+      // 【v2.8.4】桥经事件通道就绪时自动重绘面板状态（否则提示永远是"未装"假象）
+      document.addEventListener("hySearchBridgeReady", refreshAiStatus);
+      document.addEventListener("hySearchPong", refreshAiStatus);
       var aiToggleBtn = document.getElementById("hyu-ai-toggle");
       if (aiToggleBtn) {
         aiToggleBtn.onclick = function () {
@@ -2683,29 +2894,37 @@ function __hyInit__() {
             on
               ? "百度搜索已关闭"
               : "百度搜索已开启（AI 已自动关闭，两者互斥）" +
-                (typeof window.__hySearchWeb === "function"
+                (hyHasBridge()
                   ? "｜搜索桥已就绪，直连秒回"
-                  : "｜未装搜索桥脚本将走公共代理，建议安装配套 hua-yi-search.user.js"),
+                  : "｜未检测到搜索桥（装了 v1.1.0 桥则会走事件通道），将尝试公共代理"),
           );
         };
       }
       // ====== 【v2.8.1】搜索自检：定位"开了百度还是试错"到底卡在哪一环 ======
+      // 【v2.8.3】检测升级：window 直调不可用时再探事件通道（桥 v1.1.0），都能用才算装好
       var searchTestBtn = document.getElementById("hyu-search-test");
       if (searchTestBtn) {
         searchTestBtn.onclick = async function () {
-          var bridge = typeof window.__hySearchWeb === "function";
-          if (!bridge) {
+          searchTestBtn.textContent = "自检中…";
+          var viaWindow = typeof window.__hySearchWeb === "function";
+          var viaEvents = await hyBridgeProbe();
+          if (!viaWindow && !viaEvents) {
+            searchTestBtn.textContent = "搜索自检";
             hyToast(
-              "❌ 搜索桥未安装：请把 hua-yi-search.user.js 拖入浏览器安装后刷新本页（当前只能走公共代理，大陆基本不通，搜索等于关闭）",
+              "❌ 搜索桥未安装/未响应：确认 hua-yi-search.user.js 已安装且为 v1.1.0（旧版 v1.0.0 请更新）后刷新本页（当前只能走公共代理，大陆基本不通，搜索等于关闭）",
             );
             return;
           }
-          searchTestBtn.textContent = "自检中…";
           try {
-            var html = await window.__hySearchWeb(
-              "https://www.baidu.com/s?wd=" +
-                encodeURIComponent("华医网 继续教育 课件 答案"),
-            );
+            var html = viaWindow
+              ? await window.__hySearchWeb(
+                  "https://www.baidu.com/s?wd=" +
+                    encodeURIComponent("华医网 继续教育 课件 答案"),
+                )
+              : await hyBridgeFetchViaEvents(
+                  "https://www.baidu.com/s?wd=" +
+                    encodeURIComponent("华医网 继续教育 课件 答案"),
+                );
             if (String(html).indexOf("安全验证") !== -1) {
               hyToast("⚠️ 桥已通，但百度返回安全验证页（请求特征被识别）——稍后再试或换必应");
             } else {
@@ -2728,7 +2947,7 @@ function __hyInit__() {
       var AI_PRESETS = [
         { name: "硅基·免费", base: "https://api.siliconflow.cn/v1", model: "Qwen/Qwen2.5-7B-Instruct", tip: "cloud.siliconflow.cn 注册送额度，模型页标 FREE 的完全免费" },
         { name: "通义千问", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-flash", tip: "阿里云百炼控制台，qwen-flash 有免费额度" },
-        { name: "DeepSeek", base: "https://api.deepseek.com/v1", model: "deepseek-chat", tip: "platform.deepseek.com，付费但答上百题约几分钱" },
+        { name: "DeepSeek", base: "https://api.deepseek.com/v1", model: "deepseek-flash", tip: "platform.deepseek.com，付费但答上百题约几分钱（2026 在售模型：deepseek-flash / deepseek-v4-pro，老模型 deepseek-chat 已下线则报「Model Not Exist」）" },
       ];
       var presetBtns = document.querySelectorAll(".hyu-ai-preset");
       for (var pi = 0; pi < presetBtns.length; pi++) {
@@ -2928,6 +3147,15 @@ function __hyInit__() {
             }
           }
         } catch (e) {}
+        // 【v2.8.3】纳入考试中间库（keyRightAnswer）：试错循环中每轮「没被判错」的题
+        // 实时存这里，但只有「通过」才合并进章节库（keyAllAnswer）——此前未通过期间
+        // 导出永远为空，用户误以为没记录。中间库同样参与作答命中（doTest 首选）。
+        try {
+          var mid = JSON.parse(localStorage.getItem(keyRightAnswer) || "{}");
+          for (var qm in mid) {
+            if (!(qm in out)) out[qm] = mid[qm];
+          }
+        } catch (e) {}
         try {
           var cases = JSON.parse(localStorage.getItem("JJ_Case_Answer") || "{}");
           for (var q2 in cases) {
@@ -2944,15 +3172,18 @@ function __hyInit__() {
         } catch (e) {}
         return out;
       }
-      // 【v2.8.1】各题库统计（导出按钮计数 + 空库原因提示）
+      // 【v2.8.1】各题库统计（导出按钮计数 + 空库原因提示）；v2.8.3 增加考试中间库
       function bkStats() {
-        var st = { exam: 0, qa: 0, case: 0 };
+        var st = { exam: 0, qa: 0, case: 0, mid: 0 };
         try {
           var all = JSON.parse(localStorage.getItem(keyAllAnswer) || "{}");
           for (var c in all) {
             if (typeof all[c] === "object")
               for (var q in all[c]) st.exam++;
           }
+        } catch (e) {}
+        try {
+          st.mid = Object.keys(JSON.parse(localStorage.getItem(keyRightAnswer) || "{}")).length;
         } catch (e) {}
         try {
           st.qa = Object.keys(JSON.parse(localStorage.getItem("JJ_QA_AnswerText") || "{}")).length;
@@ -2983,7 +3214,7 @@ function __hyInit__() {
           try {
             var st = bkStats();
             ansExportBtn.textContent =
-              "导出题库(" + (st.exam + st.qa + st.case) + ")";
+              "导出题库(" + (st.exam + st.qa + st.case + st.mid) + ")";
           } catch (e) {}
         }
         refreshExportCount();
@@ -2994,9 +3225,11 @@ function __hyInit__() {
             var st = bkStats();
             alert(
               "题库当前为空。各题库统计：\n" +
-                "· 课件考试题库：" + st.exam + " 条 —— 只在考试「通过」后才记录（试错循环中未通过的考试，答对与否服务端不告知，无法提前入库）\n" +
+                "· 课件考试题库：" + st.exam + " 条 —— 考试「通过」后转入正式库\n" +
+                "· 考试中间库：" + st.mid + " 条 —— 试错轮次中「没被判错」的题实时存这里（未通过期间也生效，脚本重考直接命中；v2.8.3 起一并导出）\n" +
                 "· 课堂问答：" + st.qa + " 条（答完自动存）\n" +
                 "· 互动病例：" + st.case + " 条（提交后从参考答案自动存）\n\n" +
+                "两个库都是 0 的常见原因：①考试是手动作答的（只有脚本自动作答的题才会记录答案文字）；②考试页打开了但还没交过卷。\n\n" +
                 "另：统一考核的作答记忆存在 sdnew 域（浏览器按域名隔离），请在统一考核考试页右下角点「导出」。"
             );
             return;
@@ -3336,14 +3569,28 @@ function __hyInit__() {
     }
 
     var playNextRunning = false; // 防止并发调用
-    // 【v2.6.1→v2.7.2】模式2逐课考试：本课视频播完、考试按钮已解锁（#jrks href≠#）时
+    // 【v2.8.2 实测修正】考试按钮解锁信号：2026.11 线上 DOM 中 #jrks 的 href
+    // 恒为 "#"（点不点得动与 href 无关），真实解锁 = disabled 属性被站点移除
+    //（锁定: disabled="disabled" + class inputstyle2_2；解锁: 无 disabled + inputstyle2）。
+    // 旧逻辑判 href≠"#" 在真实站点上永远不成立 → 模式2永远进不了考试。
+    function hyExamBtnUnlocked() {
+      try {
+        var jrks = document.querySelector("#jrks");
+        if (!jrks) return false;
+        // 属性完全移除 = 解锁（实测锁定态为 disabled="disabled"；"" 视为仍锁定，宁可不点）
+        return jrks.getAttribute("disabled") === null;
+      } catch (e) {
+        return false;
+      }
+    }
+    // 【v2.6.1→v2.8.2】模式2逐课考试：本课视频播完、考试按钮已解锁（disabled 已移除）时
     // 立即点击进入本课考试（用户要求"播完就考"，不再等全部刷完统一考）。
-    // 点不到（按钮未解锁）返回 false，调用方继续原有切课逻辑。
+    // 按钮未解锁（考试任务接口未返回）返回 false，调用方继续原有切课逻辑，
+    // 本课保持待考试状态，后续 clock 检测到解锁会补进考试。
     function tryClickExamHere() {
       try {
         var jrks = document.querySelector("#jrks");
-        var href = jrks ? jrks.getAttribute("href") : null;
-        if (jrks && href && href !== "#") {
+        if (jrks && hyExamBtnUnlocked()) {
           console.log("【子川助手】模式2：本课视频已播完，立即进入本课考试");
           courseFinished = true;
           if (clock) {
